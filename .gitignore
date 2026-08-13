@@ -1,0 +1,9 @@
+build*/
+.agent/
+.claude/
+
+# VS Code
+*.code-workspace
+.vscode/
+
+__pycache__
