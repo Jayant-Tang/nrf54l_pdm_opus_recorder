@@ -1,0 +1,42 @@
+menu "PDM power demo"
+
+config PDM_DEMO_ENABLE
+	bool "Enable PDM capture application"
+	default y
+	help
+	  Enable the PDM capture application. Disable this option for an
+	  application image that immediately returns from main.
+
+config PDM_DEMO_STEREO
+	bool "Capture stereo PDM samples"
+	default y
+	help
+	  Capture the left and right PDM channels as interleaved 16-bit PCM
+	  samples. Disable this option to capture one mono channel.
+
+config PDM_DEMO_MONO_RIGHT
+	bool "Capture the right channel in mono mode"
+	default n
+	depends on !PDM_DEMO_STEREO
+	help
+	  Select the right PDM channel for mono capture. If disabled, the
+	  left channel is selected.
+
+config PDM_DEMO_BLOCK_MS
+	int "PCM DMA block duration in milliseconds"
+	default 25
+	range 5 100
+	help
+	  Duration of one PCM DMA block. Smaller blocks wake the CPU more
+	  often during capture.
+
+config PDM_DEMO_BLOCK_COUNT
+	int "Number of PCM DMA blocks"
+	default 4
+	range 3 8
+	help
+	  Number of blocks reserved for the DMIC driver and application.
+
+endmenu
+
+source "Kconfig.zephyr"

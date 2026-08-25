@@ -1,0 +1,40 @@
+/*
+ * nRF54L15DK PDM power demo.
+ *
+ * PDM20:
+ *   CLK: P1.12
+ *   DIN: P1.11
+ *
+ * PDM capture starts automatically after boot.
+ */
+
+&pinctrl {
+	pdm20_default_pdm_demo: pdm20_default_pdm_demo {
+		group1 {
+			psels = <NRF_PSEL(PDM_CLK, 1, 12)>,
+				<NRF_PSEL(PDM_DIN, 1, 11)>;
+			nordic,drive-mode = <NRF_DRIVE_H0H1>;
+		};
+	};
+};
+
+&pdm20 {
+	status = "okay";
+	pinctrl-0 = <&pdm20_default_pdm_demo>;
+	pinctrl-names = "default";
+	clock-source = "PCLK32M";
+	queue-size = <4>;
+
+	pdm20_dmic: dmic {
+		compatible = "zephyr,pdm-dmic";
+		status = "okay";
+		/* Force 800 kHz / ratio 50 for exact 16 kHz PCM from PCLK32M. */
+		clk-frequency-min = <795000>;
+		clk-frequency-max = <805000>;
+		clk-duty-cycle-min = <40>;
+		clk-duty-cycle-max = <60>;
+		channel-left;
+		channel-right;
+	};
+};
+
