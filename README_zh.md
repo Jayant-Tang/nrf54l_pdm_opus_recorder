@@ -76,7 +76,7 @@ Zephyr module 胶水层在 `modules/opus/`，通过 `CMakeLists.txt` 中的
   Zephyr 侧额外配置）。M33 没有 NEON，opus 的 NEON intrinsics 不适用。
 - `CONFIG_PDM_DEMO_OPUS_COMPLEXITY`（默认 0）：Opus 复杂度，越大越慢。
 - `CONFIG_PDM_DEMO_SAMPLE_RATE`（默认 16000）：PCM 采样率，PDM 采集和
-  Opus 编码共用。Opus 只接受 8/12/16/24/48 kHz（有 `BUILD_ASSERT` 兜底）；
+  Opus 编码共用。Kconfig choice 只提供 Opus 合法的 8/12/16/24/48 kHz；
   改动时需确认 overlay 里 PDM 时钟范围能整除出目标采样率。
 - Opus 合法帧长限制：`CONFIG_PDM_DEMO_BLOCK_MS` 是 Kconfig choice，
   只有 5/10/20/40/60 ms 可选（默认 20），非法值在配置期就不存在。

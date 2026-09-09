@@ -89,8 +89,8 @@ directory (e.g. `dnn/` in 1.5), revisit `modules/opus/CMakeLists.txt`.
   apply.
 - `CONFIG_PDM_DEMO_OPUS_COMPLEXITY` (default 0): Opus complexity knob.
 - `CONFIG_PDM_DEMO_SAMPLE_RATE` (default 16000): PCM sample rate shared by
-  the PDM capture and the Opus encoder. Opus accepts 8/12/16/24/48 kHz
-  (enforced by a `BUILD_ASSERT`); when changing it, make sure the PDM clock
+  the PDM capture and the Opus encoder. A Kconfig choice offers only the
+  Opus-legal 8/12/16/24/48 kHz; when changing it, make sure the PDM clock
   range in the board overlay still allows an integer decimation ratio.
 - Legal Opus frame sizes: `CONFIG_PDM_DEMO_BLOCK_MS` is a Kconfig choice
   offering only 5/10/20/40/60 ms (default 20), so illegal frame sizes are

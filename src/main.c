@@ -46,11 +46,8 @@ BUILD_ASSERT(DT_NODE_HAS_STATUS(PDM_NODE, okay), "PDM20 is not enabled");
 BUILD_ASSERT(DT_NODE_HAS_STATUS(DMIC_NODE, okay), "PDM DMIC node is not enabled");
 BUILD_ASSERT((AUDIO_BLOCK_SIZE % 4) == 0, "Audio block must be 4-byte aligned");
 
-/* Opus only accepts 8/12/16/24/48 kHz. */
-BUILD_ASSERT(SAMPLE_RATE == 8000 || SAMPLE_RATE == 12000 ||
-	     SAMPLE_RATE == 16000 || SAMPLE_RATE == 24000 ||
-	     SAMPLE_RATE == 48000,
-	     "Opus sample rate must be 8000, 12000, 16000, 24000 or 48000 Hz");
+/* The sample rate is constrained to Opus-legal values by the Kconfig
+ * choice, so no BUILD_ASSERT is needed here. */
 
 K_MEM_SLAB_DEFINE_STATIC(audio_mem_slab, AUDIO_BLOCK_SIZE,
 			 CONFIG_PDM_DEMO_BLOCK_COUNT, 4);
