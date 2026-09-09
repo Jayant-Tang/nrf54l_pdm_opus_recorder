@@ -1,6 +1,7 @@
 build*/
 .agent/
 .claude/
+.cursor/
 
 # VS Code
 *.code-workspace

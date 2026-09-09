@@ -1,41 +1,112 @@
-menu "PDM power demo"
+menu "PDM & Encoder audio demo"
 
-config PDM_DEMO_ENABLE
-	bool "Enable PDM capture application"
+# The application image always includes the Opus encoder; PDM_TEST_ONLY
+# only skips the encode call in the capture loop. Opus is fixed-point
+# only, so no FPU is needed.
+config PDM_DEMO_WITH_OPUS
+	bool
 	default y
+	select OPUS
+
+config PDM_DEMO_SAMPLE_RATE
+	int "PCM sample rate in Hz"
+	default 16000
 	help
-	  Enable the PDM capture application. Disable this option for an
-	  application image that immediately returns from main.
+	  PCM sample rate produced by the PDM/DMIC path and fed to the Opus
+	  encoder. Opus accepts 8000, 12000, 16000, 24000 or 48000 Hz
+	  (enforced by a BUILD_ASSERT). The PDM clock range in the board
+	  overlay (clk-frequency-min/max) must allow an integer decimation
+	  ratio for the chosen rate; the current overlays force
+	  800 kHz / ratio 50 for 16 kHz.
+
+choice
+	prompt "PDM channel configuration"
+	default PDM_DEMO_STEREO
+	help
+	  Stereo captures both PDM channels as interleaved 16-bit PCM.
+	  Mono captures one channel; pick the one matching the external
+	  microphone L/R strap.
 
 config PDM_DEMO_STEREO
-	bool "Capture stereo PDM samples"
-	default y
-	help
-	  Capture the left and right PDM channels as interleaved 16-bit PCM
-	  samples. Disable this option to capture one mono channel.
+	bool "Stereo (interleaved left/right)"
+
+config PDM_DEMO_MONO_LEFT
+	bool "Mono left"
 
 config PDM_DEMO_MONO_RIGHT
-	bool "Capture the right channel in mono mode"
-	default n
-	depends on !PDM_DEMO_STEREO
-	help
-	  Select the right PDM channel for mono capture. If disabled, the
-	  left channel is selected.
+	bool "Mono right"
 
-config PDM_DEMO_BLOCK_MS
-	int "PCM DMA block duration in milliseconds"
-	default 25
-	range 5 100
+endchoice
+
+config PDM_TEST_ONLY
+	bool "Capture PDM without Opus encoding (power baseline)"
+	default n
 	help
-	  Duration of one PCM DMA block. Smaller blocks wake the CPU more
-	  often during capture.
+	  Discard captured PCM blocks right after dmic_read(). Enable this
+	  only for plain PDM power measurements. By default blocks are
+	  encoded with Opus instead.
+
+choice
+	prompt "PCM DMA block duration"
+	default PDM_DEMO_BLOCK_MS_20
+	help
+	  Each block is encoded as exactly one Opus frame, so only legal
+	  Opus frame durations are offered. Smaller blocks wake the CPU
+	  more often during capture.
+
+config PDM_DEMO_BLOCK_MS_5
+	bool "5 ms"
+
+config PDM_DEMO_BLOCK_MS_10
+	bool "10 ms"
+
+config PDM_DEMO_BLOCK_MS_20
+	bool "20 ms"
+
+config PDM_DEMO_BLOCK_MS_40
+	bool "40 ms"
+
+config PDM_DEMO_BLOCK_MS_60
+	bool "60 ms"
+
+endchoice
+
+# Numeric form of the choice above, for arithmetic in the code.
+config PDM_DEMO_BLOCK_MS
+	int
+	default 5 if PDM_DEMO_BLOCK_MS_5
+	default 10 if PDM_DEMO_BLOCK_MS_10
+	default 20 if PDM_DEMO_BLOCK_MS_20
+	default 40 if PDM_DEMO_BLOCK_MS_40
+	default 60 if PDM_DEMO_BLOCK_MS_60
 
 config PDM_DEMO_BLOCK_COUNT
 	int "Number of PCM DMA blocks"
 	default 4
-	range 3 8
+	range 4 8
 	help
 	  Number of blocks reserved for the DMIC driver and application.
+	  The minimum of 4 matches the driver queue-size in the board
+	  overlays; fewer blocks would starve the DMA queue at startup.
+	  More blocks only add buffering latency.
+
+config PDM_DEMO_OPUS_COMPLEXITY
+	int "Opus encoder complexity (0-10)"
+	default 0
+	range 0 10
+	help
+	  Opus complexity setting. The default of 10 is far from real time
+	  on a 128 MHz Cortex-M33 (~250 ms per 20 ms stereo frame).
+
+# The Opus encoder state is malloc'ed at startup (measured 43308 bytes
+# at 16 kHz stereo, fixed-point), also in PDM_TEST_ONLY builds.
+config HEAP_MEM_POOL_SIZE
+	default 131072
+
+# opus_encode() uses alloca for temporary buffers; the float path
+# overflowed a 24 KB main stack in testing.
+config MAIN_STACK_SIZE
+	default 65536
 
 endmenu
 

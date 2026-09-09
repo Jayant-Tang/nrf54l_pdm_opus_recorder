@@ -1,0 +1,7 @@
+# Opus Zephyr module glue.
+# Sources live in lib/opus (xiph/opus submodule); this directory only
+# provides the build-system integration.
+name: opus
+build:
+  cmake: .
+  kconfig: Kconfig

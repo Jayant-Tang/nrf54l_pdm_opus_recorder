@@ -31,27 +31,69 @@ P1.11/P1.12 不应与 nRF7002 shield 同时使用。PDM 麦克风供电由外部
 
 1. 上电后自动配置并启动 PDM。
 2. 主线程持续调用 `dmic_read()` 获取 PCM DMA block。
-3. 当前 Demo 不处理、不保存音频，读取后立即调用 `k_mem_slab_free()` 释放 block。
+3. 默认每个 block 作为一个 Opus 帧实时编码并输出统计；
+   `CONFIG_PDM_TEST_ONLY=y` 时读取后直接 `k_mem_slab_free()` 释放，不编码。
 4. 默认是 stereo；mono 可选择 left 或 right。
 
 Debug 固件每收到 100 个 block 输出一次统计 log；Release 固件关闭 log，适合直接测量持续录音功耗。
 
-## 构建
+## 克隆与子模块
 
-先通过 nRF Connect SDK toolchain 初始化当前 PowerShell：
+本工程通过 git submodule 集成 Opus 编解码器（`lib/opus`，xiph/opus 官方仓库，当前 v1.5.2）。
+git clone 后必须先初始化子模块：
 
 ```powershell
-nrfutil sdk-manager toolchain env --ncs-version=v3.4.0 --as-script powershell |
-    Out-String |
-    Invoke-Expression
-$env:ZEPHYR_BASE = "D:\ncs\v3.4.0\zephyr"
+git submodule update --init
 ```
 
-### Debug stereo
+如果要升级 Opus 版本：
 
 ```powershell
-west build -p always -b nrf54l15dk/nrf54l15/cpuapp `
-    -d build D:\Project\learning_zephyr_pdm --no-sysbuild
+cd lib/opus
+git fetch --tags
+git checkout v1.x.y    # 目标版本 tag
+cd ../..
+git add lib/opus       # 提交新的 submodule 指针
+```
+
+Zephyr module 胶水层在 `modules/opus/`，通过 `CMakeLists.txt` 中的
+`ZEPHYR_EXTRA_MODULES` 注册。源文件用 `file(GLOB)` 按目录收集（排除 demo/工具程序），
+上游小版本升级一般无需改动胶水层；若上游新增顶层源码目录（如 1.5 引入的 `dnn/`），
+需回看 `modules/opus/CMakeLists.txt` 决定是否纳入。
+
+### Opus 编码通路
+
+- Opus 编码是**默认通路**：每个 DMA block 作为一个 Opus 帧实时编码，
+  每 100 块输出一次统计（平均字节数、最大单帧编码耗时、错误数）。
+- `CONFIG_PDM_TEST_ONLY=y`：纯 PDM 功耗测量开关（默认 n），`dmic_read()`
+  后直接 `k_mem_slab_free()` 释放，跳过编码。release 固件默认也执行编码；
+  需要纯 PDM 功耗基线时手动叠加：`-DCONFIG_PDM_TEST_ONLY=y`。
+- 定点构建（无浮点选项）：实测 128 MHz Cortex-M33 上 float 即使
+  complexity 0 也要 ~31 ms/20 ms 帧（无法实时），故只保留定点；
+  定点 + EDSP、complexity 0 稳态约 4.7 ms/帧（~23% CPU）。
+- 定点构建启用 ARMv5E EDSP 内联汇编优化（`OPUS_ARM_INLINE_ASM` +
+  `OPUS_ARM_INLINE_EDSP`，M33 的 ARMv8-M DSP 扩展支持这些指令，无需
+  Zephyr 侧额外配置）。M33 没有 NEON，opus 的 NEON intrinsics 不适用。
+- `CONFIG_PDM_DEMO_OPUS_COMPLEXITY`（默认 0）：Opus 复杂度，越大越慢。
+- `CONFIG_PDM_DEMO_SAMPLE_RATE`（默认 16000）：PCM 采样率，PDM 采集和
+  Opus 编码共用。Opus 只接受 8/12/16/24/48 kHz（有 `BUILD_ASSERT` 兜底）；
+  改动时需确认 overlay 里 PDM 时钟范围能整除出目标采样率。
+- Opus 合法帧长限制：`CONFIG_PDM_DEMO_BLOCK_MS` 是 Kconfig choice，
+  只有 5/10/20/40/60 ms 可选（默认 20），非法值在配置期就不存在。
+- heap 和 main stack 通过 Kconfig 默认值设为 128 KB / 64 KB；
+  注意 `PDM_TEST_ONLY` 固件也会创建编码器（只是不调用编码），
+  内存占用与编码固件一致。
+- `build_release*` 默认测量 PDM + Opus 编码功耗；叠加
+  `-DCONFIG_PDM_TEST_ONLY=y` 才是纯 PDM 基线。
+
+## 构建
+
+以下命令均假设当前目录是工程根目录：
+
+### Debug stereo（默认，含 Opus 编码）
+
+```powershell
+west build -p always -b nrf54l15dk/nrf54l15/cpuapp -d build . --no-sysbuild
 ```
 
 ### Release stereo
@@ -59,41 +101,32 @@ west build -p always -b nrf54l15dk/nrf54l15/cpuapp `
 `prj_release.conf` 会关闭 `CONFIG_LOG`、`CONFIG_SERIAL`、console 和 UART backend：
 
 ```powershell
-west build -p always -b nrf54l15dk/nrf54l15/cpuapp `
-    -d build_release D:\Project\learning_zephyr_pdm --no-sysbuild `
-    -- "-DEXTRA_CONF_FILE=D:/Project/learning_zephyr_pdm/prj_release.conf"
+west build -p always -b nrf54l15dk/nrf54l15/cpuapp -d build_release . --no-sysbuild `
+    -- "-DEXTRA_CONF_FILE=prj_release.conf"
 ```
 
 ### Release mono
 
-使用新的 build directory，并叠加 mono 配置：
+使用新的 build directory，并叠加 mono 配置（left）：
 
 ```powershell
-west build -p always -b nrf54l15dk/nrf54l15/cpuapp `
-    -d build_release_mono D:\Project\learning_zephyr_pdm --no-sysbuild `
-    -- "-DEXTRA_CONF_FILE=D:/Project/learning_zephyr_pdm/prj_release.conf" `
-       "-DCONFIG_PDM_DEMO_STEREO=n"
+west build -p always -b nrf54l15dk/nrf54l15/cpuapp -d build_release_mono . --no-sysbuild `
+    -- "-DEXTRA_CONF_FILE=prj_release.conf" `
+       "-DCONFIG_PDM_DEMO_MONO_LEFT=y"
 ```
 
-默认 mono 选择 left；选择 right：
+选择 right 用 `"-DCONFIG_PDM_DEMO_MONO_RIGHT=y"`。
+
+### 纯 PDM 功耗测试（不编码）
 
 ```powershell
-west build -p always -b nrf54l15dk/nrf54l15/cpuapp `
-    -d build_release_mono_right D:\Project\learning_zephyr_pdm --no-sysbuild `
-    -- "-DEXTRA_CONF_FILE=D:/Project/learning_zephyr_pdm/prj_release.conf" `
-       "-DCONFIG_PDM_DEMO_STEREO=n" `
-       "-DCONFIG_PDM_DEMO_MONO_RIGHT=y"
+west build -p always -b nrf54l15dk/nrf54l15/cpuapp -d build_test_only . --no-sysbuild `
+    -- "-DEXTRA_CONF_FILE=prj_release.conf" `
+       "-DCONFIG_PDM_TEST_ONLY=y"
 ```
 
-### Idle baseline
-
-这个版本不启用 PDM/DMIC，`main()` 立即返回，用于测量不运行应用业务时的 SoC 底电流：
-
-```powershell
-west build -p always -b nrf54l15dk/nrf54l15/cpuapp `
-    -d build_idle D:\Project\learning_zephyr_pdm --no-sysbuild `
-    -- "-DEXTRA_CONF_FILE=D:/Project/learning_zephyr_pdm/prj_idle.conf"
-```
+也支持 nRF54LM20DK：把 board target 换成 `nrf54lm20dk/nrf54lm20b/cpuapp` 即可，
+`boards/` 下已有对应配置。
 
 构建后检查：
 
@@ -114,11 +147,12 @@ west flash -d build
 预期输出类似：
 
 ```text
-nRF54L15DK PDM power demo ready
-PDM20 CLK=P1.12 DIN=P1.11, PCM=16 kHz/16-bit
+nrf54l15dk PDM power demo ready
+PDM20 CLK=P1.12 DIN=P1.11, PCM=16000 Hz/16-bit
 PDM capture starts automatically
+Opus encoder ready: state 43308 bytes, frame 320 samples/ch (20 ms), complexity 3
 PDM capture started (stereo)
-Received 100 PCM blocks, last size 1600 bytes
+Blocks 100, opus avg 10 B/frame, max enc 23952 us, err 0
 ```
 
 Release 固件关闭串口，不应依赖串口输出判断运行状态；使用 PPK2 观察持续录音电流。
@@ -126,26 +160,25 @@ Release 固件关闭串口，不应依赖串口输出判断运行状态；使用
 ## 功耗测量
 
 1. 使用 DK 的 SoC 电源测量路径和 PPK2，按 DK 硬件指南准备电流测量连接。
-2. 先烧录 `build_idle` 并复位，记录不运行 PDM/DMIC 应用时的 SoC 底电流。
-3. 再烧录 `build_release` 或 `build_release_mono`，复位后 PDM 会自动开始录音。
-4. 等待启动瞬态结束，记录持续 PDM 录音期间的平均电流。
-5. mono/stereo、PDM 时钟范围、block duration 和电源电压保持一致后再比较不同测试结果。
+2. 烧录 `build_release` 或 `build_release_mono`，复位后 PDM 会自动开始录音。
+3. 等待启动瞬态结束，记录持续 PDM 录音期间的平均电流。
+4. mono/stereo、PDM 时钟范围、block duration 和电源电压保持一致后再比较不同测试结果。
 
-`build_idle` 才是本工程的 CPU idle 参考镜像；`build_release*` 专门测量持续 PDM 录音功耗。
-约 0.7 uA 只是参考基线，实际数值还会受 DK 电源路径、
-P1.11/P1.12 外部电平、PPK2 配置和板上漏电影响。不要把 System OFF 电流作为本工程的验收值。
+`build_release*` 测量持续 PDM 录音 + Opus 编码功耗；叠加
+`-DCONFIG_PDM_TEST_ONLY=y` 构建的固件才是纯 PDM 录音基线。
+实际数值会受 DK 电源路径、P1.11/P1.12 外部电平、PPK2 配置和板上漏电影响。
 PDM 麦克风自身的供电电流不包含在 SoC 电流中，但外部信号线的电平仍可能影响 SoC 引脚漏电。
 
 ## 关键配置
 
-- `CONFIG_PDM_DEMO_ENABLE=n`：关闭应用 PDM 逻辑，`main()` 立即返回。
-- `CONFIG_PDM_DEMO_STEREO=y`：默认 stereo，PCM 按 left/right 交错排列。
-- `CONFIG_PDM_DEMO_STEREO=n`：mono。
-- `CONFIG_PDM_DEMO_MONO_RIGHT=y`：mono 选择 right；未设置时选择 left。
+- 声道是三选一 choice：`CONFIG_PDM_DEMO_STEREO`（默认，left/right 交错）、
+  `CONFIG_PDM_DEMO_MONO_LEFT`、`CONFIG_PDM_DEMO_MONO_RIGHT`。
 - `clk-frequency-min/max = 795000/805000`：排除 ratio 48，强制 driver 选择 800 kHz / ratio 50。
 - `nordic,drive-mode = <NRF_DRIVE_H0H1>`：PDM pin 使用 H0H1 高驱动模式。
-- `CONFIG_PDM_DEMO_BLOCK_MS=25`：每个 DMA block 默认 25 ms。
-- `CONFIG_PDM_DEMO_BLOCK_COUNT=4`：DMA slab block 数量。
+- `CONFIG_PDM_DEMO_BLOCK_MS`：每个 DMA block 的时长，Kconfig choice 只允许
+  5/10/20/40/60 ms（合法 Opus 帧长），默认 20 ms。
+- `CONFIG_PDM_DEMO_BLOCK_COUNT`：DMA slab block 数量，默认 4，范围 4-8
+  （下限对应 overlay 里驱动的 `queue-size = <4>`，再少会在启动时欠载）。
 
 PDM driver 会根据 16 kHz PCM rate 和 Devicetree 中声明的 PDM clock 范围选择可用的 PDM 时钟。
 当前 ratio 50 下，32 MHz `PCLK32M` 的实际 PDM clock 为 800 kHz，PCM 采样率精确为 16 kHz。
@@ -183,7 +216,7 @@ DMIC driver 通过 EasyDMA 把转换后的 PCM 写入 RAM。应用使用 `K_MEM_
 PCM rate × sample width × channel count × block duration
 ```
 
-本工程默认 16 kHz、16-bit、stereo、25 ms，因此一个 block 是 1600 bytes。
+本工程默认 16 kHz、16-bit、stereo、20 ms，因此一个 block 是 1280 bytes。
 
 ### 3. 构造 `dmic_cfg`
 
@@ -203,19 +236,27 @@ dmic_trigger(dmic_dev, DMIC_TRIGGER_START);
 `dmic_configure()` 会检查声道、采样率和位宽，并根据 PCM rate 和允许的 PDM clock
 计算 ratio/prescaler。`START` 后，PDM 外设开始输出 CLK，硬件完成滤波、Decimation 和 DMA。
 
-### 5. 读取并释放 PCM block
+### 5. 读取、编码并释放 PCM block
 
 ```c
 void *buffer;
 size_t size;
 
 dmic_read(dmic_dev, 0, &buffer, &size, 1000);
-/* 处理或丢弃 buffer */
+opus_encode_block(buffer);   /* CONFIG_PDM_TEST_ONLY 时为空操作 */
 k_mem_slab_free(&audio_mem_slab, buffer);
 ```
 
 `dmic_read()` 成功后，应用拥有这个 buffer；使用完必须归还，否则 DMA slab 会耗尽。
-当前 Demo 只统计 block 数量，然后立即释放。
+
+默认通路下，每个 block 正好是一个 Opus 帧（16 kHz、20 ms、320 样本/声道），
+由 `opus_encode_block()` 调 `opus_encode()` 实时编码。帧长合法性由
+`BUILD_ASSERT` 保证（block 时长只能是 5/10/20/40/60 ms）。编码耗时用
+cycle counter 统计：前 10 帧逐帧打印，之后每 100 块输出一次平均字节数、
+最大单帧耗时和错误数。编码结果当前只统计、不保存。
+
+`CONFIG_PDM_TEST_ONLY=y` 时 `opus_encode_block()` 为空操作，block 读取后
+直接释放，用于纯 PDM 功耗测量。
 
 ### 6. 持续运行
 

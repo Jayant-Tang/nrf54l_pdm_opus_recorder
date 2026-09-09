@@ -1,0 +1,10 @@
+# Opus codec module
+
+config OPUS
+	bool "Opus audio codec library"
+	help
+	  Build the Opus codec from the xiph/opus submodule (lib/opus).
+	  Fixed-point only: measured on a 128 MHz Cortex-M33, the float
+	  build cannot reach real time even at complexity 0 (~31 ms per
+	  20 ms stereo frame), while the fixed-point build runs at
+	  ~4.7 ms per frame.
