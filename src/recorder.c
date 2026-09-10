@@ -141,9 +141,11 @@ int recorder_init(void)
 		return ret;
 	}
 
+	/* Zephyr's littlefs statvfs reports f_bsize = prog_size; the real
+	 * block size is in f_frsize. */
 	LOG_INF("%s ready: %lu KB total, %lu KB free", REC_MOUNT_POINT,
-		(unsigned long)(stat.f_blocks * stat.f_bsize / 1024),
-		(unsigned long)(stat.f_bfree * stat.f_bsize / 1024));
+		(unsigned long)(stat.f_blocks * stat.f_frsize / 1024),
+		(unsigned long)(stat.f_bfree * stat.f_frsize / 1024));
 
 	scan_file_index();
 	update_index();

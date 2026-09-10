@@ -18,9 +18,17 @@
 			mount-point = "/lfs1";
 			partition = <&lfs1_partition>;
 			automount;
+			/* Program in full 256-byte MX25R64 flash pages:
+			 * 16-byte progs turn one 4 KB Ogg page write into
+			 * 256 page-program commands (~100-180 ms), stalling
+			 * the capture loop and burning power.
+			 * NOTE: cache-size is a required binding property, but
+			 * Zephyr sizes the file-cache heap from
+			 * CONFIG_FS_LITTLEFS_CACHE_SIZE only - keep the two
+			 * in sync or fs_open fails with ENOMEM. */
 			read-size = <16>;
-			prog-size = <16>;
-			cache-size = <64>;
+			prog-size = <256>;
+			cache-size = <512>;
 			lookahead-size = <32>;
 			block-cycles = <512>;
 		};
