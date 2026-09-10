@@ -116,10 +116,10 @@ west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_release_mono . --
     -- "-DFILE_SUFFIX=release" "-DCONFIG_PDM_DEMO_MONO_LEFT=y"
 
 # Plain PDM+Opus power baseline (standalone base config
-# prj_test_only.conf: button-toggled PDM+Opus encoding, no storage,
+# prj_pdm_only.conf: button-toggled PDM+Opus encoding, no storage,
 # no LED, no SMP/BLE, no serial)
-west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_test_only . --no-sysbuild `
-    -- "-DFILE_SUFFIX=test_only"
+west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_pdm_only . --no-sysbuild `
+    -- "-DFILE_SUFFIX=pdm_only"
 ```
 
 Measurement procedure:
@@ -174,11 +174,17 @@ defaults):
   Recording is toggled with Button 0; at this cap the file is saved
   automatically so a forgotten recording cannot fill the flash.
 
-Software structure: each module self-initializes via `SYS_INIT`
-(APPLICATION level, priorities `opus_enc` 50 → `recorder` 60 (LittleFS
-automount already ran at POST_KERNEL) → `smp_bt` 70 → button/LED 80);
-`main()` only starts the capture and runs the loop. `recorder.c` is only
-compiled with `CONFIG_FILE_SYSTEM=y`, `smp_bt.c` only with `CONFIG_BT=y`.
+Software structure: one module per topic, so each can be read on its
+own — `pdm_capture.c` (PDM/DMIC capture), `opus_enc.c` (Opus encoder),
+`recorder.c` (Ogg Opus files on LittleFS), `smp_bt.c` (BLE SMP) — plus a
+small `main.c` state machine with the PCM gain. Button and LED come from
+the NCS DK library (`dk_buttons_and_leds`, debounce built in; the button
+callback toggles the LED directly). Modules self-initialize via
+`SYS_INIT` (APPLICATION level, priorities `opus_enc` 50 → `recorder` 60
+(LittleFS automount already ran at POST_KERNEL) → `smp_bt` 70 →
+`pdm_capture` 80); `main()` only initializes the DK library and runs the
+loop. `recorder.c` is only compiled with `CONFIG_FILE_SYSTEM=y`,
+`smp_bt.c` only with `CONFIG_BT=y`.
 
 Other notable items:
 

@@ -133,9 +133,18 @@ config PDM_DEMO_REC_SECONDS
 	  which a recording stops and the file is saved automatically,
 	  so a forgotten recording cannot fill the flash.
 
+config PDM_DEMO_PDM_ONLY
+	bool "PDM + Opus only power baseline (no storage, LED or BLE)"
+	help
+	  Pure PDM capture + Opus encoding mode for power measurement:
+	  the encoded frames are discarded, and recording to flash, the
+	  LED and BLE/SMP are all compiled out. Used by prj_pdm_only.conf,
+	  which also disables serial/logging. The base configuration must
+	  not enable FILE_SYSTEM or BT when this is set.
+
 # The Opus encoder state is malloc'ed at startup (measured 43308 bytes
 # at 16 kHz stereo, fixed-point), in all configurations including
-# test_only (encoder created but its output discarded).
+# pdm_only (encoder created but its output discarded).
 config HEAP_MEM_POOL_SIZE
 	default 131072
 

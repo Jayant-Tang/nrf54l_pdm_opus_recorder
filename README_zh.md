@@ -108,10 +108,10 @@ west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_release . --no-sy
 west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_release_mono . --no-sysbuild `
     -- "-DFILE_SUFFIX=release" "-DCONFIG_PDM_DEMO_MONO_LEFT=y"
 
-# 纯 PDM+Opus 功耗基线（独立基础配置 prj_test_only.conf：按键启停
+# 纯 PDM+Opus 功耗基线（独立基础配置 prj_pdm_only.conf：按键启停
 # PDM+Opus 编码，不落盘、无 LED、无 SMP/BLE、无串口）
-west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_test_only . --no-sysbuild `
-    -- "-DFILE_SUFFIX=test_only"
+west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_pdm_only . --no-sysbuild `
+    -- "-DFILE_SUFFIX=pdm_only"
 ```
 
 测量方法：
@@ -155,11 +155,15 @@ Runtime PM 默认开启（`CONFIG_PM_DEVICE_RUNTIME`），空闲外设自动挂�
 - `CONFIG_PDM_DEMO_REC_SECONDS`（默认 300）：最长录音时长上限。录音由
   Button 0 手动启停，到上限自动停止落盘，防止忘记按停撑爆 flash。
 
-软件结构：各模块通过 `SYS_INIT` 自初始化（APPLICATION 级，优先级
-`opus_enc` 50 → `recorder` 60（LittleFS automount 在 POST_KERNEL 已完成）
-→ `smp_bt` 70 → button/LED 80），`main()` 只负责启动采集和主循环。
-`recorder.c` 仅在 `CONFIG_FILE_SYSTEM=y`、`smp_bt.c` 仅在 `CONFIG_BT=y`
-时编译。
+软件结构：一个主题一个模块，可独立阅读——`pdm_capture.c`（PDM/DMIC
+采集）、`opus_enc.c`（Opus 编码器）、`recorder.c`（LittleFS 上的 Ogg
+Opus 落盘）、`smp_bt.c`（BLE SMP）——外加一个只含状态机和 PCM 增益的
+`main.c`。按键和 LED 使用 NCS DK 库（`dk_buttons_and_leds`，自带消抖，
+按键回调里直接翻转 LED）。各模块通过 `SYS_INIT` 自初始化（APPLICATION
+级，优先级 `opus_enc` 50 → `recorder` 60（LittleFS automount 在
+POST_KERNEL 已完成）→ `smp_bt` 70 → `pdm_capture` 80），`main()` 只
+初始化 DK 库并跑主循环。`recorder.c` 仅在 `CONFIG_FILE_SYSTEM=y`、
+`smp_bt.c` 仅在 `CONFIG_BT=y` 时编译。
 
 其他关键项：
 

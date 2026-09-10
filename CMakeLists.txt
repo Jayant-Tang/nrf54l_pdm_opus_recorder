@@ -18,6 +18,7 @@ project(learning_zephyr_pdm)
 
 target_sources(app PRIVATE
   src/main.c
+  src/pdm_capture.c
   src/opus_enc.c
 )
 target_sources_ifdef(CONFIG_FILE_SYSTEM app PRIVATE src/recorder.c)
