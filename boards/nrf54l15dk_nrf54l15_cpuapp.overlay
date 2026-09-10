@@ -1,5 +1,5 @@
 /*
- * nRF54L15DK PDM power demo.
+ * nRF54L15DK PDM Opus recorder.
  *
  * PDM20:
  *   CLK: P1.12
@@ -8,12 +8,45 @@
  * PDM capture starts automatically after boot.
  */
 
-&pinctrl {
-	pdm20_default_pdm_demo: pdm20_default_pdm_demo {
-		group1 {
-			psels = <NRF_PSEL(PDM_CLK, 1, 12)>,
-				<NRF_PSEL(PDM_DIN, 1, 11)>;
-			nordic,drive-mode = <NRF_DRIVE_H0H1>;
+/* MCUMgr UART transport on uart30 (VCOM0, P0.00/P0.01); uart20 stays
+ * the logging console on VCOM1. LittleFS auto-mounts at /lfs1. */
+/ {
+	chosen {
+		zephyr,uart-mcumgr = &uart30;
+	};
+
+	fstab {
+		compatible = "zephyr,fstab";
+
+		lfs1: lfs1 {
+			compatible = "zephyr,fstab,littlefs";
+			mount-point = "/lfs1";
+			partition = <&lfs1_partition>;
+			automount;
+			read-size = <16>;
+			prog-size = <16>;
+			cache-size = <64>;
+			lookahead-size = <32>;
+			block-cycles = <512>;
+		};
+	};
+};
+
+/* External flash (MX25R64 on spi00): whole 8 MB for LittleFS.
+ * Raise the clock to the SPIM00 maximum (128 MHz core / 4) to shorten
+ * fs_write stalls. */
+&mx25r64 {
+	spi-max-frequency = <32000000>;
+	zephyr,pm-device-runtime-auto;
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		lfs1_partition: partition@0 {
+			label = "lfs1_partition";
+			reg = <0x00000000 0x00800000>;
 		};
 	};
 };
@@ -21,9 +54,11 @@
 &pdm20 {
 	status = "okay";
 	pinctrl-0 = <&pdm20_default_pdm_demo>;
-	pinctrl-names = "default";
+	pinctrl-1 = <&pdm20_sleep_pdm_demo>;
+	pinctrl-names = "default", "sleep";
 	clock-source = "PCLK32M";
-	queue-size = <4>;
+	queue-size = <16>;
+	zephyr,pm-device-runtime-auto;
 
 	pdm20_dmic: dmic {
 		compatible = "zephyr,pdm-dmic";
@@ -38,3 +73,42 @@
 	};
 };
 
+/* Button 0 (P1.13): use the GPIO sense mechanism (port event) for edge
+ * detection instead of a GPIOTE pin-event channel.
+ */
+&gpio1 {
+	sense-edge-mask = <BIT(13)>;
+};
+
+&uart30 {
+	status = "okay";
+	zephyr,pm-device-runtime-auto;
+};
+
+/* Runtime PM for the console UART and the external-flash SPI bus;
+ * the drivers resume them on demand (log TX / fs access). */
+&uart20 {
+	zephyr,pm-device-runtime-auto;
+};
+
+&spi00 {
+	zephyr,pm-device-runtime-auto;
+};
+
+&pinctrl {
+	pdm20_default_pdm_demo: pdm20_default_pdm_demo {
+		group1 {
+			psels = <NRF_PSEL(PDM_CLK, 1, 12)>,
+					<NRF_PSEL(PDM_DIN, 1, 11)>;
+			nordic,drive-mode = <NRF_DRIVE_H0H1>;
+		};
+	};
+
+	pdm20_sleep_pdm_demo: pdm20_sleep_pdm_demo {
+		group1 {
+			psels = <NRF_PSEL(PDM_CLK, 1, 12)>,
+					<NRF_PSEL(PDM_DIN, 1, 11)>;
+			low-power-enable;
+		};
+	};
+};

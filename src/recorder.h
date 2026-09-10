@@ -1,0 +1,26 @@
+/*
+ * Opus frame recorder on LittleFS (external flash).
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef RECORDER_H
+#define RECORDER_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+/* Check the auto-mounted /lfs1 volume and find the next free file index. */
+int recorder_init(void);
+
+/* Start recording into /lfs1/rec_XXXX.opus (Ogg Opus, directly playable).
+ * Returns -EBUSY while a previous clip is still being recorded. */
+int recorder_start(void);
+
+/* Feed one encoded Opus frame; written only while recording. The file is
+ * synced and closed automatically after CONFIG_PDM_DEMO_REC_SECONDS. */
+void recorder_feed_frame(const uint8_t *data, uint16_t len);
+
+bool recorder_is_recording(void);
+
+#endif /* RECORDER_H */

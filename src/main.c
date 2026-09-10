@@ -1,46 +1,44 @@
 /*
- * learning_zephyr_pdm — nRF54L15DK PDM power demo
+ * nrf54l_pdm_opus_recorder — nRF54L15/LM20 DK PDM Opus recorder
  *
  * PDM20 is connected to an external digital microphone:
  *   CLK: P1.12
  *   DIN: P1.11
  *
- * Capture starts automatically and runs until reset.
+ * Capture starts automatically and runs until reset. Pressing Button 0
+ * records the next CONFIG_PDM_DEMO_REC_SECONDS of Opus audio to a file
+ * on the external flash (LittleFS, /lfs1).
+ *
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 
+#if CONFIG_PDM_DEMO_GAIN_DB > 0
+#include <math.h>
+#endif
+
 #include <zephyr/audio/dmic.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/init.h>
 #include <zephyr/kernel.h>
-#include <opus.h>
 
 #include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(pdm_power_demo, LOG_LEVEL_INF);
+#include "audio_defs.h"
+#include "opus_enc.h"
+#include "recorder.h"
+
+LOG_MODULE_REGISTER(pdm_opus_recorder, LOG_LEVEL_INF);
 
 #define PDM_NODE       DT_NODELABEL(pdm20)
 #define DMIC_NODE      DT_NODELABEL(pdm20_dmic)
 
-/* Shared by the PDM/DMIC path and the Opus encoder. */
-#define SAMPLE_RATE        CONFIG_PDM_DEMO_SAMPLE_RATE
-/* Both the DMIC driver and the opus_encode() s16 API are fixed at 16-bit. */
-#define SAMPLE_BIT_WIDTH   16
-#define BYTES_PER_SAMPLE   (SAMPLE_BIT_WIDTH / 8)
 #define READ_TIMEOUT_MS    1000
-
-#if CONFIG_PDM_DEMO_STEREO
-#define CHANNEL_COUNT 2
-#else
-#define CHANNEL_COUNT 1
-#endif
-
-#define AUDIO_BLOCK_SIZE \
-	((SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNEL_COUNT * \
-	  CONFIG_PDM_DEMO_BLOCK_MS) / 1000)
 
 BUILD_ASSERT(DT_NODE_HAS_STATUS(PDM_NODE, okay), "PDM20 is not enabled");
 BUILD_ASSERT(DT_NODE_HAS_STATUS(DMIC_NODE, okay), "PDM DMIC node is not enabled");
@@ -120,75 +118,142 @@ static int start_capture(void)
 	return 0;
 }
 
+/* --- Button 0: trigger a recording (port event via sense-edge-mask) --- */
 
-/* One DMA block is encoded as exactly one Opus frame. */
-#define OPUS_FRAME_SAMPLES (AUDIO_BLOCK_SIZE / BYTES_PER_SAMPLE / CHANNEL_COUNT)
-#define OPUS_MAX_PACKET    512
+#define REC_BTN_EVT	BIT(0)
+/* Ignore edges for this long after a trigger (contact bounce). */
+#define BTN_DEBOUNCE_MS	200
 
-/* The block duration is constrained to legal Opus frame sizes by the
- * Kconfig choice, so no BUILD_ASSERT is needed here. */
+static K_EVENT_DEFINE(rec_events);
 
-static OpusEncoder *opus_enc;
-static uint8_t opus_packet[OPUS_MAX_PACKET];
+static const struct gpio_dt_spec rec_button =
+	GPIO_DT_SPEC_GET_OR(DT_ALIAS(sw0), gpios, {0});
+static struct gpio_callback rec_button_cb;
+static int64_t last_trigger_ms;
 
-static uint32_t opus_frame_count;
-static uint64_t opus_bytes_total;
-static uint32_t opus_encode_max_us;
-static uint32_t opus_err_count;
-
-static int opus_setup(void)
+static void button_isr(const struct device *dev, struct gpio_callback *cb,
+		       uint32_t pins)
 {
-	int err;
+	k_event_post(&rec_events, REC_BTN_EVT);
+}
 
-	opus_enc = opus_encoder_create(SAMPLE_RATE, CHANNEL_COUNT,
-				       OPUS_APPLICATION_VOIP, &err);
-	if (err != OPUS_OK || opus_enc == NULL) {
-		LOG_ERR("opus_encoder_create failed: %d", err);
-		return -EIO;
+static int button_init(void)
+{
+	int ret;
+
+	if (!gpio_is_ready_dt(&rec_button)) {
+		LOG_ERR("Button 0 device not ready");
+		return -ENODEV;
 	}
 
-	/* Default complexity (10) is far from real time on a 128 MHz M33;
-	 * lower it for the demo. */
-	opus_encoder_ctl(opus_enc,
-			 OPUS_SET_COMPLEXITY(CONFIG_PDM_DEMO_OPUS_COMPLEXITY));
+	ret = gpio_pin_configure_dt(&rec_button, GPIO_INPUT);
+	if (ret < 0) {
+		LOG_ERR("Button 0 configure failed: %d", ret);
+		return ret;
+	}
 
-	LOG_INF("Opus encoder ready: state %d bytes, frame %u samples/ch (%u ms), "
-		"complexity %d",
-		opus_encoder_get_size(CHANNEL_COUNT), OPUS_FRAME_SAMPLES,
-		CONFIG_PDM_DEMO_BLOCK_MS, CONFIG_PDM_DEMO_OPUS_COMPLEXITY);
+	ret = gpio_pin_interrupt_configure_dt(&rec_button,
+					      GPIO_INT_EDGE_FALLING);
+	if (ret < 0) {
+		LOG_ERR("Button 0 interrupt configure failed: %d", ret);
+		return ret;
+	}
+
+	gpio_init_callback(&rec_button_cb, button_isr, BIT(rec_button.pin));
+	gpio_add_callback_dt(&rec_button, &rec_button_cb);
 	return 0;
 }
 
-/* No-op under CONFIG_PDM_TEST_ONLY: the block is just returned. */
-static void opus_encode_block(const void *pcm)
+/* --- Recording status LED (led0): on while a clip is being written --- */
+
+static const struct gpio_dt_spec rec_led =
+	GPIO_DT_SPEC_GET_OR(DT_ALIAS(led0), gpios, {0});
+static bool rec_led_on;
+
+static int led_init(void)
 {
-#if !defined(CONFIG_PDM_TEST_ONLY)
-	uint32_t start_cycles = k_cycle_get_32();
-	int nb_bytes = opus_encode(opus_enc, pcm, OPUS_FRAME_SAMPLES,
-				   opus_packet, sizeof(opus_packet));
-	uint32_t encode_us =
-		k_cyc_to_us_near32(k_cycle_get_32() - start_cycles);
+	if (!gpio_is_ready_dt(&rec_led)) {
+		LOG_WRN("LED0 not available, no recording indicator");
+		return -ENODEV;
+	}
 
-	++opus_frame_count;
+	int ret = gpio_pin_configure_dt(&rec_led, GPIO_OUTPUT_INACTIVE);
 
-	if (nb_bytes < 0) {
-		opus_err_count++;
+	if (ret < 0) {
+		LOG_ERR("LED0 configure failed: %d", ret);
+	}
+	return ret;
+}
+
+/* Cheap enough to call every loop iteration; only touches the GPIO on
+ * state changes. */
+static void update_rec_led(void)
+{
+#if defined(CONFIG_FILE_SYSTEM)
+	bool recording = recorder_is_recording();
+
+	if (recording != rec_led_on) {
+		(void)gpio_pin_set_dt(&rec_led, recording);
+		rec_led_on = recording;
+	}
+#endif
+}
+
+/* --- PCM gain (applied before Opus encoding) --- */
+
+#if CONFIG_PDM_DEMO_GAIN_DB > 0
+static int32_t gain_q16 = 65536; /* Q16, 1.0x */
+
+static void gain_init(void)
+{
+	gain_q16 = (int32_t)(pow(10.0, CONFIG_PDM_DEMO_GAIN_DB / 20.0) *
+			     65536.0);
+	LOG_INF("PCM gain %d dB (x%u.%02u)", CONFIG_PDM_DEMO_GAIN_DB,
+		(unsigned)(gain_q16 >> 16),
+		(unsigned)((gain_q16 & 0xFFFF) * 100 / 65536));
+}
+
+static void apply_gain(int16_t *samples, size_t size)
+{
+	for (size_t i = 0; i < size / sizeof(*samples); i++) {
+		int32_t s = ((int32_t)samples[i] * gain_q16 + 0x8000) >> 16;
+
+		samples[i] = (int16_t)CLAMP(s, INT16_MIN, INT16_MAX);
+	}
+}
+#else
+static void gain_init(void) { }
+#endif
+
+static int board_io_init(void)
+{
+	gain_init();
+	(void)button_init();
+	(void)led_init();
+	return 0;
+}
+
+/* Handle pending button events: start a recording unless one is already
+ * running (which also covers the "no re-trigger within 10 s" rule). */
+static void handle_button_events(void)
+{
+#if defined(CONFIG_FILE_SYSTEM) && !defined(CONFIG_PDM_TEST_ONLY)
+	int64_t now;
+
+	if (k_event_test(&rec_events, REC_BTN_EVT) == 0) {
+		return;
+	}
+	k_event_clear(&rec_events, REC_BTN_EVT);
+
+	now = k_uptime_get();
+	if (now - last_trigger_ms < BTN_DEBOUNCE_MS) {
 		return;
 	}
 
-	opus_bytes_total += (uint32_t)nb_bytes;
-	if (encode_us > opus_encode_max_us) {
-		opus_encode_max_us = encode_us;
-	}
-
-	/* Per-frame timing for the first frames to gauge whether
-	 * encoding keeps up with real time. */
-	if (opus_frame_count <= 10U) {
-		LOG_INF("Frame %u: %d bytes, enc %u us",
-			opus_frame_count, nb_bytes, encode_us);
+	if (recorder_start() == 0) {
+		last_trigger_ms = now;
 	}
 #endif
-	ARG_UNUSED(pcm);
 }
 
 static void log_stats(uint32_t block_count, size_t last_size)
@@ -197,17 +262,31 @@ static void log_stats(uint32_t block_count, size_t last_size)
 	LOG_INF("Received %u PCM blocks, last size %u bytes",
 		block_count, last_size);
 #else
+	uint64_t bytes_total;
+	uint32_t max_us, err;
+
 	ARG_UNUSED(last_size);
 
+	opus_enc_get_stats(&bytes_total, &max_us, &err);
 	LOG_INF("Blocks %u, opus avg %llu B/frame, max enc %u us, err %u",
-		block_count, opus_bytes_total / block_count,
-		opus_encode_max_us, opus_err_count);
+		block_count, bytes_total / block_count, max_us, err);
 #endif
+}
+
+/* Phase timing for stall diagnosis (cycles converted to us). */
+static uint32_t max_feed_us, max_misc_us;
+
+static inline uint32_t cycles_to_us(uint32_t cycles)
+{
+	return (uint32_t)((uint64_t)cycles * 1000000U /
+			  sys_clock_hw_cycles_per_sec());
 }
 
 static void capture_forever(void)
 {
+	static uint8_t opus_packet[OPUS_MAX_PACKET];
 	uint32_t block_count = 0;
+	uint32_t stall_count = 0;
 
 	while (true) {
 		void *buffer;
@@ -216,16 +295,62 @@ static void capture_forever(void)
 
 		ret = dmic_read(dmic_dev, 0, &buffer, &size, READ_TIMEOUT_MS);
 		if (ret == -EAGAIN) {
+			/* The PDM driver stops permanently if the slab ever
+			 * runs dry (e.g. a long flash erase stalls the loop
+			 * during recording). Restart capture after a sustained
+			 * stall instead of staying silent forever. */
+			if (++stall_count >= 5U) {
+				LOG_WRN("PDM stalled, restarting capture "
+					"(max feed %u us, max misc %u us)",
+					max_feed_us, max_misc_us);
+				max_feed_us = 0;
+				max_misc_us = 0;
+				(void)configure_dmic(false);
+				if (start_capture() == 0) {
+					stall_count = 0;
+				}
+			}
 			continue;
 		}
 		if (ret != 0) {
 			LOG_ERR("DMIC read failed: %d", ret);
 			return;
 		}
+		stall_count = 0;
 
-		opus_encode_block(buffer);
+#if CONFIG_PDM_DEMO_GAIN_DB > 0 && !defined(CONFIG_PDM_TEST_ONLY)
+		apply_gain(buffer, size);
+#endif
+
+		int nb = opus_enc_encode(buffer, opus_packet,
+					 sizeof(opus_packet));
+
+		uint32_t c0 = k_cycle_get_32();
+
+#if defined(CONFIG_FILE_SYSTEM)
+		if (nb > 0) {
+			recorder_feed_frame(opus_packet, (uint16_t)nb);
+		}
+#endif
+
+		uint32_t c1 = k_cycle_get_32();
+
 		k_mem_slab_free(&audio_mem_slab, buffer);
 		++block_count;
+
+		handle_button_events();
+		update_rec_led();
+
+		uint32_t c2 = k_cycle_get_32();
+		uint32_t feed_us = cycles_to_us(c1 - c0);
+		uint32_t misc_us = cycles_to_us(c2 - c1);
+
+		if (feed_us > max_feed_us) {
+			max_feed_us = feed_us;
+		}
+		if (misc_us > max_misc_us) {
+			max_misc_us = misc_us;
+		}
 
 		if ((block_count % 100U) == 0U) {
 			log_stats(block_count, size);
@@ -235,25 +360,19 @@ static void capture_forever(void)
 
 int main(void)
 {
-	int ret;
-
 	if (!device_is_ready(dmic_dev)) {
 		LOG_ERR("Required device is not ready");
 		return 0;
 	}
 
-	LOG_INF("%s PDM power demo ready", CONFIG_BOARD);
+	/* opus_enc / recorder / smp_bt / button+led all self-init via
+	 * SYS_INIT (APPLICATION level, priorities 50/60/70/80). */
+	LOG_INF("%s PDM Opus recorder ready", CONFIG_BOARD);
 	LOG_INF("PDM20 CLK=P1.12 DIN=P1.11, PCM=%u Hz/%u-bit",
 		CONFIG_PDM_DEMO_SAMPLE_RATE, SAMPLE_BIT_WIDTH);
 	LOG_INF("PDM capture starts automatically");
 
-	ret = opus_setup();
-	if (ret < 0) {
-		return 0;
-	}
-
-	ret = start_capture();
-	if (ret < 0) {
+	if (start_capture() < 0) {
 		return 0;
 	}
 
@@ -261,3 +380,7 @@ int main(void)
 
 	return 0;
 }
+
+/* After recorder (60) and smp_bt (70); GPIO devices are ready from
+ * POST_KERNEL already. */
+SYS_INIT(board_io_init, APPLICATION, 80);

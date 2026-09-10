@@ -1,3 +1,10 @@
 [submodule "lib/opus"]
 	path = lib/opus
 	url = https://github.com/xiph/opus
+	# Pinned release tag (the recorded submodule SHA is the real lock;
+	# this documents the intended version for `git submodule update --remote`).
+	branch = v1.5.2
+[submodule "lib/ogg"]
+	path = lib/ogg
+	url = https://github.com/xiph/ogg.git
+	branch = v1.3.6

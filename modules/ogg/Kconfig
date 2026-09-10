@@ -1,0 +1,7 @@
+# Ogg container module
+
+config OGG
+	bool "Ogg container library (libogg)"
+	help
+	  Build libogg from the xiph/ogg submodule (lib/ogg). Used to
+	  encapsulate Opus frames into directly playable .opus files.

@@ -1,304 +1,202 @@
-# learning_zephyr_pdm
+# nrf54l_pdm_opus_recorder
 
-Minimal PDM recording and SoC power-measurement demo for the nRF54L15DK
-using the Zephyr DMIC API.
+PDM recording and power-evaluation demo for the nRF54L15 / nRF54LM20,
+built on the Zephyr DMIC API (NCS v3.4.0).
 
-## Hardware
+## 1. Features and usage
 
-- **Development board**: nRF54L15DK
-- **Board target**: `nrf54l15dk/nrf54l15/cpuapp`
+Continuous PDM capture → real-time Opus compression → one button press
+saves the next few seconds as a `.opus` file (LittleFS on external flash,
+LED indicates recording) → files are transferred to a PC or phone over
+SMP (MCUMgr) via UART or BLE.
+
+```mermaid
+flowchart LR
+    mic["PDM microphone"] -->|"PDM (CLK/DIN)"| pdm["PDM20 DMIC"]
+    pdm -->|"PCM 16 kHz/16-bit"| enc["Opus encoder"]
+    enc -->|"Opus frames"| rec["recorder (Ogg container)"]
+    rec -->|"fs_write"| lfs[("LittleFS /lfs1 (MX25R64)")]
+    btn["Button 0"] -->|"record N s"| rec
+    rec --> led0["LED0 recording indicator"]
+    lfs --- smp["MCUMgr (fs / shell / os)"]
+    smp --- uart["UART: uart30 = VCOM0"]
+    smp --- ble["BLE: PDM_SMP"]
+    uart --- pc["PC: mcumgr CLI / AuTem"]
+    ble --- phone["Phone: nRF Connect Device Manager"]
+```
+
+### How to operate
+
+1. Capture and encoding start automatically at boot; nothing is stored.
+2. **Press Button 0**: the next `CONFIG_PDM_DEMO_REC_SECONDS` (default 10)
+   seconds are written to `/lfs1/rec_XXXX.opus`; **LED0 is on** while
+   recording and turns off when the file is saved. Further presses during
+   a recording are ignored.
+3. Retrieve files:
+   - **PC over UART**: MCUMgr is on VCOM0 (usually the first COM port on
+     Windows, 115200 8N1); logs are on VCOM1 (second COM port).
+
+     ```powershell
+     mcumgr --conntype serial --connstring dev=COM3,baud=115200 shell exec fs ls /lfs1
+     mcumgr --conntype serial --connstring dev=COM3,baud=115200 fs download /lfs1/rec_0000.opus rec_0000.opus
+     ```
+
+   - **Phone over BLE**: connect to `PDM_SMP` (no pairing). The Android
+     nRF Connect Device Manager app has a Shell tab — run `fs ls /lfs1`
+     directly.
+   - **iOS**: Device Manager has no Shell tab and SMP has no "list
+     directory" command, so download the fixed path `/lfs1/index.txt`
+     first (refreshed at boot and after every recording, lists all files
+     with sizes), then download by full path. The in-app Preview does not
+     handle `.opus`; open downloaded files in a player like VLC.
+
+Debug firmware prints statistics every 100 blocks on the log port
+(average frame bytes, max encode time, error count).
+
+## 2. Hardware
+
+- **Boards**: nRF54L15DK (`nrf54l15dk/nrf54l15/cpuapp`) or nRF54LM20DK
+  (`nrf54lm20dk/nrf54lm20b/cpuapp`); ready-made files under `boards/`
 - **NCS**: v3.4.0
-- **PDM peripheral**: PDM20
-- **PCM output**: 16 kHz, 16-bit
-- **PDM ratio**: 50
-- **PDM GPIO drive**: `H0H1`
-- **Runtime mode**: capture starts automatically after boot
+- **PDM peripheral**: PDM20, ratio 50, 800 kHz PDM clock, `H0H1` drive
+- **External flash**: on-board MX25R64 (spi00 @ 32 MHz), whole 8 MB
+  mounted as LittleFS at `/lfs1`
+- **UARTs**: VCOM0 = uart30 = MCUMgr; VCOM1 = uart20 = logging
 
 ### PDM wiring
 
-| nRF54L15DK | PDM microphone |
+| DK | PDM microphone |
 |---|---|
 | P1.12 | CLK |
 | P1.11 | DIN / DATA |
 | GND | GND |
 | External supply | VDD |
 
-For stereo, connect two microphones to the same CLK and DIN signals and
-strap their L/R pins to opposite channel selections. For mono, connect one
-microphone and select the matching left or right channel configuration.
-
-Do not use P1.11/P1.12 together with an nRF7002 shield. The microphone is
-powered externally and its supply current
+For stereo, two microphones share CLK/DIN with their L/R pins strapped to
+opposite channels. For mono, connect one microphone and select the
+matching mono configuration. Do not use P1.11/P1.12 together with an
+nRF7002 shield. The microphone is powered externally; its supply current
 is not part of the SoC measurement.
 
-## Behavior
+## 3. Clone and build
 
-1. After boot, the application configures and starts PDM automatically.
-2. The main thread continuously calls `dmic_read()` for PCM DMA blocks.
-3. By default each block is encoded as one Opus frame in real time with
-   statistics logging. With `CONFIG_PDM_TEST_ONLY=y` the block is released
-   via `k_mem_slab_free()` right after the read, without encoding.
-4. Stereo is the default. Mono left and mono right are supported.
-
-Debug firmware logs a block count every 100 blocks. Release firmware disables
-logging and is intended for continuous-recording power measurement.
-
-## Clone and submodules
-
-The Opus codec is integrated as a git submodule (`lib/opus`, upstream xiph/opus,
-currently v1.5.2). Initialize it after cloning:
+The Opus codec is a git submodule (`lib/opus`, upstream xiph/opus v1.5.2);
+initialize it after cloning:
 
 ```powershell
 git submodule update --init
 ```
 
-To upgrade Opus:
+To upgrade Opus: `cd lib/opus; git fetch --tags; git checkout v1.x.y`,
+then `git add lib/opus`. The Zephyr module glue lives in `modules/opus/`
+and usually needs no changes for minor upstream upgrades.
+
+### Debug build (default: stereo + Opus + MCUMgr)
 
 ```powershell
-cd lib/opus
-git fetch --tags
-git checkout v1.x.y    # target release tag
-cd ../..
-git add lib/opus       # commit the new submodule pointer
-```
+nrfutil sdk-manager toolchain env --ncs-version=v3.4.0 --as-script powershell | Out-String | Invoke-Expression
+$env:ZEPHYR_BASE = (Resolve-Path "D:\ncs\v3.4.0\zephyr").Path
 
-The Zephyr module glue lives in `modules/opus/` (maintained in this repo) and is
-registered via `ZEPHYR_EXTRA_MODULES` in `CMakeLists.txt`. Sources are collected
-with `file(GLOB)` per directory (excluding demo/tool programs), so minor upstream
-upgrades usually need no glue changes. If an upgrade adds a new top-level source
-directory (e.g. `dnn/` in 1.5), revisit `modules/opus/CMakeLists.txt`.
-
-### Opus encoding path
-
-- Opus encoding is the **default path**: each DMA block is encoded as one
-  Opus frame in real time; every 100 blocks a statistics line is logged
-  (average bytes, max per-frame encode time, error count).
-- `CONFIG_PDM_TEST_ONLY=y`: plain PDM power-measurement switch (default n);
-  blocks are released via `k_mem_slab_free()` right after `dmic_read()`,
-  skipping the encoder. Release images encode by default; overlay
-  `-DCONFIG_PDM_TEST_ONLY=y` for a plain PDM power baseline.
-- Fixed-point only build (no float option): measured on a 128 MHz
-  Cortex-M33, the float build cannot reach real time even at complexity 0
-  (~31 ms per 20 ms stereo frame), so only fixed-point is kept. With
-  fixed-point + EDSP at complexity 0, steady state is ~4.7 ms per frame
-  (~23% CPU).
-- The fixed-point build enables the ARMv5E EDSP inline-asm optimizations
-  (`OPUS_ARM_INLINE_ASM` + `OPUS_ARM_INLINE_EDSP`; the ARMv8-M DSP
-  extension of the M33 supports these instructions and needs no Zephyr-side
-  configuration). The M33 has no NEON, so opus's NEON intrinsics do not
-  apply.
-- `CONFIG_PDM_DEMO_OPUS_COMPLEXITY` (default 0): Opus complexity knob.
-- `CONFIG_PDM_DEMO_SAMPLE_RATE` (default 16000): PCM sample rate shared by
-  the PDM capture and the Opus encoder. A Kconfig choice offers only the
-  Opus-legal 8/12/16/24/48 kHz; when changing it, make sure the PDM clock
-  range in the board overlay still allows an integer decimation ratio.
-- Legal Opus frame sizes: `CONFIG_PDM_DEMO_BLOCK_MS` is a Kconfig choice
-  offering only 5/10/20/40/60 ms (default 20), so illegal frame sizes are
-  impossible at configuration time.
-- Heap and main stack are sized for Opus (128 KB / 64 KB) via Kconfig
-  defaults. Note that `PDM_TEST_ONLY` images also create the encoder (they
-  just never call the encode path), so their memory footprint matches the
-  encoding image.
-- `build_release*` measures PDM + Opus encoding power by default; build
-  with `-DCONFIG_PDM_TEST_ONLY=y` for the plain PDM baseline.
-
-## Build
-
-All commands assume the current directory is the project root:
-
-### Debug stereo (default, with Opus encoding)
-
-```powershell
-west build -p always -b nrf54l15dk/nrf54l15/cpuapp -d build . --no-sysbuild
-```
-
-### Release stereo
-
-`prj_release.conf` disables `CONFIG_LOG`, `CONFIG_SERIAL`, the console,
-and the UART log backend:
-
-```powershell
-west build -p always -b nrf54l15dk/nrf54l15/cpuapp -d build_release . --no-sysbuild `
-    -- "-DEXTRA_CONF_FILE=prj_release.conf"
-```
-
-### Release mono
-
-Use a separate build directory and add the mono (left) configuration:
-
-```powershell
-west build -p always -b nrf54l15dk/nrf54l15/cpuapp -d build_release_mono . --no-sysbuild `
-    -- "-DEXTRA_CONF_FILE=prj_release.conf" `
-       "-DCONFIG_PDM_DEMO_MONO_LEFT=y"
-```
-
-Use `"-DCONFIG_PDM_DEMO_MONO_RIGHT=y"` for the right channel.
-
-### Plain PDM power baseline (no encoding)
-
-```powershell
-west build -p always -b nrf54l15dk/nrf54l15/cpuapp -d build_test_only . --no-sysbuild `
-    -- "-DEXTRA_CONF_FILE=prj_release.conf" `
-       "-DCONFIG_PDM_TEST_ONLY=y"
-```
-
-The nRF54LM20DK is also supported: use board target
-`nrf54lm20dk/nrf54lm20b/cpuapp` (matching files exist under `boards/`).
-
-After each build, check:
-
-- `build*/zephyr/zephyr.hex`
-- `build*/zephyr/zephyr.dts`
-- `build*/zephyr/.config`
-- `build*/zephyr/include/generated/zephyr/devicetree_generated.h`
-
-## Flashing and debug log
-
-```powershell
+west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build . --no-sysbuild
 west flash -d build
 ```
 
-Without a shield, debug log is routed to VCOM1 on the nRF54L15DK, usually
-the second COM port on Windows, at 115200 8N1. Open the serial port before
-resetting the board to capture the boot log.
+For the nRF54L15DK use board target `nrf54l15dk/nrf54l15/cpuapp`.
 
-Expected output:
+Check the artifacts after building: `build/zephyr/zephyr.hex`,
+`zephyr.dts`, `.config`.
 
-```text
-nrf54l15dk PDM power demo ready
-PDM20 CLK=P1.12 DIN=P1.11, PCM=16000 Hz/16-bit
-PDM capture starts automatically
-Opus encoder ready: state 43308 bytes, frame 320 samples/ch (20 ms), complexity 3
-PDM capture started (stereo)
-Blocks 100, opus avg 10 B/frame, max enc 23952 us, err 0
+## 4. Release builds and power measurement
+
+Release builds use a standalone base configuration `prj_release.conf`
+(via `-DFILE_SUFFIX=release`, which fully replaces `prj.conf` instead of
+overlaying it). Logging, serial, and the console are disabled. Behavior:
+**continuous PDM capture + Opus encoding + button recording + SMP over
+BLE** (the UART SMP transport goes away with the serial port; BLE
+transfer and recording are unaffected). Intended for power measurement.
+
+```powershell
+# Release stereo (default)
+west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_release . --no-sysbuild `
+    -- "-DFILE_SUFFIX=release"
+
+# Release mono (left; use -DCONFIG_PDM_DEMO_MONO_RIGHT=y for right)
+west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_release_mono . --no-sysbuild `
+    -- "-DFILE_SUFFIX=release" "-DCONFIG_PDM_DEMO_MONO_LEFT=y"
+
+# Plain PDM power baseline (standalone base config prj_test_only.conf:
+# no encoding, no storage, no SMP/BLE)
+west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_test_only . --no-sysbuild `
+    -- "-DFILE_SUFFIX=test_only"
 ```
 
-Release firmware disables serial output. Use the power profiler to observe
-continuous-recording current.
+Measurement procedure:
 
-## Power measurement
-
-1. Prepare the DK SoC current-measurement path and PPK2 according to the DK
-   hardware guide.
-2. Flash `build_release` or `build_release_mono` and reset. PDM starts
-   automatically.
-3. Wait for startup transients to settle, then record the average current
-   during continuous PDM capture.
-4. Keep PCM mode, PDM clock range, block duration, and supply voltage
+1. Prepare the DK SoC current-measurement path and PPK2 according to the
+   DK hardware guide.
+2. Flash the image and reset; PDM capture starts automatically.
+3. Wait for startup transients to settle, then record the average current.
+4. Keep channel mode, PDM clock, block duration, and supply voltage
    unchanged when comparing measurements.
 
-`build_release*` images measure continuous PDM capture + Opus encoding
-power; build with `-DCONFIG_PDM_TEST_ONLY=y` for the plain PDM capture
-baseline. Results depend on DK power routing, external P1.11/P1.12 levels,
-PPK2 settings, and board leakage. Microphone supply current is excluded
-from the SoC measurement, but external signal levels can still affect GPIO
-leakage.
+Runtime device PM is enabled by default (`CONFIG_PM_DEVICE_RUNTIME`), so
+idle peripherals suspend themselves. During recording the firmware pins
+the flash and its SPI bus active with `pm_device_runtime_get()` so each
+write does not pay a wake-up penalty.
 
-## Key configuration
+### Power data
 
-- Channel selection is a 3-way choice: `CONFIG_PDM_DEMO_STEREO` (default,
-  interleaved left/right), `CONFIG_PDM_DEMO_MONO_LEFT`,
-  `CONFIG_PDM_DEMO_MONO_RIGHT`.
-- `clk-frequency-min/max = 795000/805000`: excludes ratio 48 and forces the
-  driver to select 800 kHz / ratio 50.
-- `nordic,drive-mode = <NRF_DRIVE_H0H1>`: use H0H1 high-drive mode for PDM pins.
-- `CONFIG_PDM_DEMO_BLOCK_MS`: DMA block duration; a Kconfig choice allows
-  only 5/10/20/40/60 ms (legal Opus frame sizes), default 20 ms.
-- `CONFIG_PDM_DEMO_BLOCK_COUNT`: number of DMA slab blocks, default 4,
-  range 4-8 (the minimum matches the driver `queue-size = <4>` in the
-  board overlays; fewer would starve the DMA queue at startup).
+![PDM period current](docs/imgs/pdm_period.png)
 
-The PDM driver selects an available PDM clock from the 16 kHz PCM rate and
-the clock range declared in Devicetree. With ratio 50 and a 32 MHz
-`PCLK32M`, the actual PDM clock is 800 kHz and the PCM rate is exactly
-16 kHz. With one microphone, only the channel matching the external L/R
-strap contains valid data.
+<!-- TODO: add more power measurement plots -->
 
-## PDM / DMIC API flow
+## 5. Key configuration
 
-### 1. Describe the hardware in Devicetree
+Audio parameters (Kconfig; use `west build -t menuconfig` or change the
+defaults):
 
-The overlay enables the nRF54L15 PDM peripheral and uses a child node to
-describe the connected digital microphone:
+- `CONFIG_PDM_DEMO_SAMPLE_RATE` (default 16000): the choice only offers
+  Opus-legal 8/12/16/24/48 kHz; when changing it, make sure the PDM clock
+  range in the overlay still allows an integer decimation ratio.
+- `CONFIG_PDM_DEMO_STEREO` / `MONO_LEFT` / `MONO_RIGHT`: 3-way channel
+  choice.
+- `CONFIG_PDM_DEMO_BLOCK_MS` (default 20): DMA block duration = Opus frame
+  size; the choice only allows 5/10/20/40/60 ms.
+- `CONFIG_PDM_DEMO_BLOCK_COUNT` (default 16, range 4-16): DMA slab blocks.
+  16 x 20 ms = 320 ms of slack, sized to cover a LittleFS block erase
+  during recording (MX25R64 4 KB sector erase, max ~300 ms). If the slab
+  runs dry, the PDM driver stops permanently; the firmware detects a
+  sustained stall and restarts capture automatically. The matching
+  `queue-size = <16>` is set in the board overlays.
+- `CONFIG_PDM_DEMO_OPUS_COMPLEXITY` (default 0): higher is slower;
+  fixed-point + EDSP at complexity 0 costs ~4.7 ms per 20 ms stereo frame
+  (~23% CPU on the 128 MHz M33). Fixed-point only: the float build needs
+  ~31 ms per frame even at complexity 0 and cannot run in real time.
+- `CONFIG_PDM_DEMO_GAIN_DB` (default 0, 0-40 dB): digital gain applied to
+  PCM before Opus encoding (fixed-point Q16 multiply with int16
+  saturation). 6 dB doubles the amplitude; too much clips loud sounds.
+  Gain must live before compression — Opus packets cannot be scaled
+  linearly, so post-compression gain would need a decode/gain/re-encode
+  round trip. Ignored in `PDM_TEST_ONLY` builds.
+- `CONFIG_PDM_DEMO_REC_SECONDS` (default 10): recording length per button
+  press.
+- `CONFIG_PDM_TEST_ONLY` (default n): plain PDM power baseline; blocks are
+  discarded right after `dmic_read()`. Use `prj_test_only.conf` for the
+  actual build (it also disables flash/SMP/BLE), see section 4.
 
-```dts
-&pdm20 {
-    status = "okay";
+Software structure: each module self-initializes via `SYS_INIT`
+(APPLICATION level, priorities `opus_enc` 50 → `recorder` 60 (LittleFS
+automount already ran at POST_KERNEL) → `smp_bt` 70 → button/LED 80);
+`main()` only starts the capture and runs the loop. `recorder.c` is only
+compiled with `CONFIG_FILE_SYSTEM=y`, `smp_bt.c` only with `CONFIG_BT=y`.
 
-    dmic {
-        compatible = "zephyr,pdm-dmic";
-        clk-frequency-min = <795000>;
-        clk-frequency-max = <805000>;
-        channel-left;
-        channel-right;
-    };
-};
-```
+Other notable items:
 
-`zephyr,pdm-dmic` is not an I2S node. It describes the PDM clock range,
-duty cycle, and available channels for the Nordic DMIC driver.
-
-### 2. Provide DMA buffers
-
-The DMIC driver uses EasyDMA to write converted PCM data into RAM. The
-application provides blocks through `K_MEM_SLAB_DEFINE_STATIC()`:
-
-```text
-PCM rate × sample width × channel count × block duration
-```
-
-This demo uses 16 kHz, 16-bit, stereo, and 20 ms blocks, so one block is
-1280 bytes.
-
-### 3. Build `dmic_cfg`
-
-`struct dmic_cfg` contains:
-
-- `io`: supported PDM clock range and duty cycle;
-- `streams`: PCM rate, sample width, block size, and memory slab;
-- `channel`: mono/stereo and left/right channel mapping.
-
-### 4. Configure and start
-
-```c
-dmic_configure(dmic_dev, &cfg);
-dmic_trigger(dmic_dev, DMIC_TRIGGER_START);
-```
-
-`dmic_configure()` validates the requested rate, width, and channel map,
-then calculates the PDM ratio and prescaler. After `START`, the PDM
-peripheral generates CLK, performs filtering and decimation, and transfers
-PCM blocks through EasyDMA.
-
-### 5. Read, encode, and release PCM blocks
-
-```c
-void *buffer;
-size_t size;
-
-dmic_read(dmic_dev, 0, &buffer, &size, 1000);
-opus_encode_block(buffer);   /* no-op under CONFIG_PDM_TEST_ONLY */
-k_mem_slab_free(&audio_mem_slab, buffer);
-```
-
-After a successful `dmic_read()`, the application owns the buffer and must
-return it to the slab. Otherwise, the DMA buffer pool eventually runs out.
-
-On the default path, each block is exactly one Opus frame (16 kHz, 20 ms,
-320 samples per channel) and is encoded in real time by
-`opus_encode_block()` via `opus_encode()`. Frame-size legality is enforced
-by a `BUILD_ASSERT` (block duration must be 5/10/20/40/60 ms). Encode
-timing is measured with the cycle counter: the first 10 frames are logged
-individually, then every 100 blocks a line with average bytes, max
-per-frame encode time, and error count is printed. Encoded packets are
-currently only counted, not stored.
-
-With `CONFIG_PDM_TEST_ONLY=y`, `opus_encode_block()` is a no-op and blocks
-are released right after the read, for plain PDM power measurement.
-
-### 6. Continuous capture
-
-This demo does not call `DMIC_TRIGGER_STOP`, so PDM runs continuously.
-Debug configuration is for observing startup and block-count logs. Release
-configuration disables `CONFIG_LOG`, `CONFIG_SERIAL`, the console, and the
-UART backend for power measurement.
+- Heap and main stack default to 128 KB / 64 KB via Kconfig (Opus needs
+  them).
+- `clk-frequency-min/max = 795000/805000` in the overlays excludes ratio
+  48 and forces 800 kHz / ratio 50, giving exactly 16 kHz PCM.
+- External flash SPI clock is 32 MHz (SPIM00 maximum: 128 MHz core / 4).
+- MCUMgr: fs / os / shell groups enabled; UART (uart30) + BLE (`PDM_SMP`,
+  no pairing) transports; `CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2304` is the
+  minimum for fs uploads.

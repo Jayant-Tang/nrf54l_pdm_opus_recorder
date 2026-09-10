@@ -1,12 +1,8 @@
 menu "PDM & Encoder audio demo"
 
-# The application image always includes the Opus encoder; PDM_TEST_ONLY
-# only skips the encode call in the capture loop. Opus is fixed-point
-# only, so no FPU is needed.
-config PDM_DEMO_WITH_OPUS
-	bool
-	default y
-	select OPUS
+# The application image always includes the Opus encoder (CONFIG_OPUS=y
+# in prj.conf); PDM_TEST_ONLY only skips the encode call in the capture
+# loop. Opus is fixed-point only, so no FPU is needed.
 
 choice
 	prompt "PCM sample rate"
@@ -107,13 +103,17 @@ config PDM_DEMO_BLOCK_MS
 
 config PDM_DEMO_BLOCK_COUNT
 	int "Number of PCM DMA blocks"
-	default 4
-	range 4 8
+	default 16
+	range 4 16
 	help
 	  Number of blocks reserved for the DMIC driver and application.
 	  The minimum of 4 matches the driver queue-size in the board
 	  overlays; fewer blocks would starve the DMA queue at startup.
-	  More blocks only add buffering latency.
+	  More blocks only add buffering latency. The default of 16 gives
+	  ~320 ms of slack (at 20 ms blocks) so that a LittleFS block
+	  erase during recording (MX25R64 4 KB sector erase: typ 60 ms,
+	  max 300 ms) does not exhaust the slab; the PDM driver stops
+	  permanently when buffer allocation fails.
 
 config PDM_DEMO_OPUS_COMPLEXITY
 	int "Opus encoder complexity (0-10)"
@@ -122,6 +122,26 @@ config PDM_DEMO_OPUS_COMPLEXITY
 	help
 	  Opus complexity setting. The default of 10 is far from real time
 	  on a 128 MHz Cortex-M33 (~250 ms per 20 ms stereo frame).
+
+config PDM_DEMO_GAIN_DB
+	int "Digital gain on PCM before Opus encoding (dB)"
+	default 0
+	range 0 40
+	help
+	  Fixed-point gain applied to every PCM sample ahead of the Opus
+	  encoder (gain after compression would need a decode/gain/re-encode
+	  round trip). 6 dB doubles the amplitude. Too much gain clips loud
+	  sounds (samples saturate at int16 range). Ignored in PDM_TEST_ONLY
+	  builds, where the encode path is skipped entirely.
+
+config PDM_DEMO_REC_SECONDS
+	int "Recording length per button press (seconds)"
+	default 10
+	range 1 300
+	help
+	  Pressing Button 0 saves this many seconds of Opus audio to one
+	  file on the external flash. While a clip is being recorded,
+	  further button presses are ignored.
 
 # The Opus encoder state is malloc'ed at startup (measured 43308 bytes
 # at 16 kHz stereo, fixed-point), also in PDM_TEST_ONLY builds.

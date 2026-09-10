@@ -1,0 +1,7 @@
+# libogg Zephyr module glue.
+# Sources live in lib/ogg (xiph/ogg submodule); this directory only
+# provides the build-system integration.
+name: ogg
+build:
+  cmake: .
+  kconfig: Kconfig
