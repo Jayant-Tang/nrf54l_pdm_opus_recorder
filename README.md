@@ -19,7 +19,7 @@ flowchart LR
     btn["Button 0"] -->|"start/stop"| rec
     rec --> led0["LED0 recording indicator"]
     lfs --- smp["MCUMgr (fs / shell / os)"]
-    smp --- ble["BLE: PDM_SMP (200ms adv)"]
+    smp --- ble["BLE: PDM_SMP (300ms adv)"]
     ble --- phone["Phone: nRF Connect Device Manager"]
 ```
 
@@ -194,5 +194,8 @@ Other notable items:
   48 and forces 800 kHz / ratio 50, giving exactly 16 kHz PCM.
 - External flash SPI clock is 32 MHz (SPIM00 maximum: 128 MHz core / 4).
 - MCUMgr: fs / os / shell groups enabled; BLE-only transport (`PDM_SMP`,
-  no pairing, 200 ms advertising interval);
+  no pairing, 300 ms advertising interval). Idle connections run at a
+  100-200 ms interval for low power; during SMP transfers MCUMgr
+  temporarily switches to 7.5-11.25 ms and restores after 5 s idle, so
+  downloads stay fast. ATT MTU is 988 (phones cap at their own max).
   `CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2304` is the minimum for fs uploads.

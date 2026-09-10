@@ -18,7 +18,7 @@ flowchart LR
     btn["Button 0"] -->|"开始/停止"| rec
     rec --> led0["LED0 录音指示"]
     lfs --- smp["MCUMgr (fs / shell / os)"]
-    smp --- ble["BLE: PDM_SMP (200ms 广播)"]
+    smp --- ble["BLE: PDM_SMP (300ms 广播)"]
     ble --- phone["手机: nRF Connect Device Manager"]
 ```
 
@@ -172,5 +172,7 @@ POST_KERNEL 已完成）→ `smp_bt` 70 → `pdm_capture` 80），`main()` 只
   强制 800 kHz / ratio 50，PCM 精确 16 kHz。
 - 外部 flash SPI 时钟 32 MHz（SPIM00 上限 128 MHz/4）。
 - MCUMgr：fs / os / shell 组全开，仅 BLE 传输（`PDM_SMP`，无配对，
-  200ms 广播间隔）；`CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2304` 是 fs
-  上传的最低要求。
+  300ms 广播间隔）。空闲连接用 100-200ms interval 省电；SMP 传输
+  期间 MCUMgr 自动切到 7.5-11.25ms 快速参数，停止活动 5s 后回落，
+  下载速度不受影响。ATT MTU 988（手机侧按自身上限封顶）。
+  `CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2304` 是 fs 上传的最低要求。

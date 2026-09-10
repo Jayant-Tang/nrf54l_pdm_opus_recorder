@@ -23,9 +23,9 @@ LOG_MODULE_REGISTER(smp_bt, LOG_LEVEL_INF);
 
 static struct k_work advertise_work;
 
-/* 200 ms interval (in 0.625 ms units): much lower idle current than
+/* 300 ms interval (in 0.625 ms units): much lower idle current than
  * BT_LE_ADV_CONN_FAST_1 (~50 ms), still connects quickly enough. */
-#define ADV_INTERVAL_200MS	0x140
+#define ADV_INTERVAL_300MS	0x1E0
 
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
@@ -40,8 +40,8 @@ static const struct bt_data sd[] = {
 static void advertise(struct k_work *work)
 {
 	int rc = bt_le_adv_start(
-		BT_LE_ADV_PARAM(BT_LE_ADV_OPT_CONN, ADV_INTERVAL_200MS,
-				ADV_INTERVAL_200MS, NULL),
+		BT_LE_ADV_PARAM(BT_LE_ADV_OPT_CONN, ADV_INTERVAL_300MS,
+				ADV_INTERVAL_300MS, NULL),
 		ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 
 	if (rc) {
@@ -63,6 +63,19 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	}
 }
 
+/* Log connection parameter updates: MCUMgr's conn-param control requests
+ * fast intervals (7.5-11.25 ms) while SMP packets flow and restores the
+ * peripheral preferred values (100-200 ms, see prj.conf) after 5 s of
+ * inactivity - fast transfers without paying for them at idle. */
+static void le_param_updated(struct bt_conn *conn, uint16_t interval,
+			     uint16_t latency, uint16_t timeout)
+{
+	LOG_INF("BLE conn params: interval %u.%u ms, latency %u, "
+		"timeout %u ms",
+		(unsigned)(interval * 5 / 4), (unsigned)(interval * 5 % 4 * 25),
+		latency, (unsigned)(timeout * 10));
+}
+
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	LOG_INF("BLE disconnected, reason 0x%02x %s", reason,
@@ -77,6 +90,7 @@ static void on_conn_recycled(void)
 BT_CONN_CB_DEFINE(smp_conn_callbacks) = {
 	.connected = connected,
 	.disconnected = disconnected,
+	.le_param_updated = le_param_updated,
 	.recycled = on_conn_recycled,
 };
 
