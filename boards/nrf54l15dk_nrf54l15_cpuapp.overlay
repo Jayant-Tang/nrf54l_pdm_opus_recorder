@@ -8,13 +8,8 @@
  * PDM capture starts automatically after boot.
  */
 
-/* MCUMgr UART transport on uart30 (VCOM0, P0.00/P0.01); uart20 stays
- * the logging console on VCOM1. LittleFS auto-mounts at /lfs1. */
+/* LittleFS auto-mounts at /lfs1. */
 / {
-	chosen {
-		zephyr,uart-mcumgr = &uart30;
-	};
-
 	fstab {
 		compatible = "zephyr,fstab";
 
@@ -78,11 +73,6 @@
  */
 &gpio1 {
 	sense-edge-mask = <BIT(13)>;
-};
-
-&uart30 {
-	status = "okay";
-	zephyr,pm-device-runtime-auto;
 };
 
 /* Runtime PM for the console UART and the external-flash SPI bus;

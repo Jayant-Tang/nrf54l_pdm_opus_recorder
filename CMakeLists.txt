@@ -14,7 +14,7 @@ set(ZEPHYR_EXTRA_MODULES
 )
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(nrf54l_pdm_opus_recorder)
+project(learning_zephyr_pdm)
 
 target_sources(app PRIVATE
   src/main.c

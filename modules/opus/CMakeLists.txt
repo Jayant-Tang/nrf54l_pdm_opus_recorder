@@ -21,6 +21,14 @@ zephyr_library_named(opus)
 # roughly 2x faster for the float encoder on Cortex-M33.
 zephyr_library_compile_options(-O2)
 
+# Upstream opus is not warning-clean under Zephyr's default flags; silence
+# the noisy ones for the library only (app code keeps full warnings).
+zephyr_library_compile_options(
+  -Wno-double-promotion
+  -Wno-maybe-uninitialized
+  -Wno-unused-variable
+)
+
 # Building without config.h: OPUS_BUILD is mandatory; USE_ALLOCA selects
 # stack-based temporary allocation (opus requires exactly one of VAR_ARRAYS,
 # USE_ALLOCA, NONTHREADSAFE_PSEUDOSTACK). picolibc provides <alloca.h> and

@@ -14,8 +14,7 @@
 int opus_enc_init(void);
 
 /* Encode one PCM block (AUDIO_BLOCK_SIZE bytes) into pkt.
- * Returns the encoded byte count, 0 in CONFIG_PDM_TEST_ONLY builds,
- * or a negative Opus error code. */
+ * Returns the encoded byte count or a negative Opus error code. */
 int opus_enc_encode(const void *pcm, uint8_t *pkt, size_t cap);
 
 void opus_enc_get_stats(uint64_t *bytes_total, uint32_t *max_us, uint32_t *err);

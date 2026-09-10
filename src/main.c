@@ -5,9 +5,10 @@
  *   CLK: P1.12
  *   DIN: P1.11
  *
- * Capture starts automatically and runs until reset. Pressing Button 0
- * records the next CONFIG_PDM_DEMO_REC_SECONDS of Opus audio to a file
- * on the external flash (LittleFS, /lfs1).
+ * PDM stays off at idle. Pressing Button 0 starts capture and records
+ * Opus audio to a file on the external flash (LittleFS, /lfs1);
+ * pressing it again (or reaching CONFIG_PDM_DEMO_REC_SECONDS) stops and
+ * saves. LED0 is on while recording.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -24,6 +25,7 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/pinctrl.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 
@@ -51,6 +53,17 @@ K_MEM_SLAB_DEFINE_STATIC(audio_mem_slab, AUDIO_BLOCK_SIZE,
 			 CONFIG_PDM_DEMO_BLOCK_COUNT, 4);
 
 static const struct device *const dmic_dev = DEVICE_DT_GET(PDM_NODE);
+
+/* The DMIC driver has no PM support and applies the default pin state at
+ * init, which connects the DIN input buffer: a powered microphone's
+ * internal activity then leaks current into the SoC GPIO rail even while
+ * PDM is off. Manage the pin states manually: sleep (input buffers
+ * disconnected) whenever capture is stopped. The driver's own pinctrl
+ * config is static to its compilation unit, so define a private copy
+ * here (same DT node, a few bytes of duplicate ROM data). */
+PINCTRL_DT_DEFINE(PDM_NODE);
+static const struct pinctrl_dev_config *const pdm_pcfg =
+	PINCTRL_DT_DEV_CONFIG_GET(PDM_NODE);
 
 static void build_dmic_config(struct dmic_cfg *cfg,
 			      struct pcm_stream_cfg *stream,
@@ -98,6 +111,8 @@ static int start_capture(void)
 {
 	int ret;
 
+	(void)pinctrl_apply_state(pdm_pcfg, PINCTRL_STATE_DEFAULT);
+
 	ret = configure_dmic(true);
 	if (ret < 0) {
 		LOG_ERR("DMIC configure failed: %d", ret);
@@ -116,6 +131,27 @@ static int start_capture(void)
 		"mono-right" : "mono-left"));
 
 	return 0;
+}
+
+static void stop_capture(void)
+{
+	int ret = dmic_trigger(dmic_dev, DMIC_TRIGGER_STOP);
+
+	if (ret < 0) {
+		LOG_ERR("DMIC stop failed: %d", ret);
+	}
+
+	/* Drain queued blocks so the slab is whole for the next session. */
+	void *buffer;
+	size_t size;
+
+	while (dmic_read(dmic_dev, 0, &buffer, &size, 0) == 0) {
+		k_mem_slab_free(&audio_mem_slab, buffer);
+	}
+
+	(void)configure_dmic(false);
+	(void)pinctrl_apply_state(pdm_pcfg, PINCTRL_STATE_SLEEP);
+	LOG_INF("PDM capture stopped");
 }
 
 /* --- Button 0: trigger a recording (port event via sense-edge-mask) --- */
@@ -168,7 +204,9 @@ static int button_init(void)
 
 static const struct gpio_dt_spec rec_led =
 	GPIO_DT_SPEC_GET_OR(DT_ALIAS(led0), gpios, {0});
+#if defined(CONFIG_FILE_SYSTEM)
 static bool rec_led_on;
+#endif
 
 static int led_init(void)
 {
@@ -230,38 +268,31 @@ static int board_io_init(void)
 	gain_init();
 	(void)button_init();
 	(void)led_init();
+	/* DMIC init (POST_KERNEL) applied the default pin state; go to sleep
+	 * state until the first recording starts. */
+	(void)pinctrl_apply_state(pdm_pcfg, PINCTRL_STATE_SLEEP);
 	return 0;
 }
 
-/* Handle pending button events: start a recording unless one is already
- * running (which also covers the "no re-trigger within 10 s" rule). */
-static void handle_button_events(void)
+/* Consume a pending button event with debounce; true on a valid press. */
+static bool button_pressed(void)
 {
-#if defined(CONFIG_FILE_SYSTEM) && !defined(CONFIG_PDM_TEST_ONLY)
-	int64_t now;
-
 	if (k_event_test(&rec_events, REC_BTN_EVT) == 0) {
-		return;
+		return false;
 	}
 	k_event_clear(&rec_events, REC_BTN_EVT);
 
-	now = k_uptime_get();
-	if (now - last_trigger_ms < BTN_DEBOUNCE_MS) {
-		return;
-	}
+	int64_t now = k_uptime_get();
 
-	if (recorder_start() == 0) {
-		last_trigger_ms = now;
+	if (now - last_trigger_ms < BTN_DEBOUNCE_MS) {
+		return false;
 	}
-#endif
+	last_trigger_ms = now;
+	return true;
 }
 
 static void log_stats(uint32_t block_count, size_t last_size)
 {
-#if defined(CONFIG_PDM_TEST_ONLY)
-	LOG_INF("Received %u PCM blocks, last size %u bytes",
-		block_count, last_size);
-#else
 	uint64_t bytes_total;
 	uint32_t max_us, err;
 
@@ -270,7 +301,6 @@ static void log_stats(uint32_t block_count, size_t last_size)
 	opus_enc_get_stats(&bytes_total, &max_us, &err);
 	LOG_INF("Blocks %u, opus avg %llu B/frame, max enc %u us, err %u",
 		block_count, bytes_total / block_count, max_us, err);
-#endif
 }
 
 /* Phase timing for stall diagnosis (cycles converted to us). */
@@ -282,79 +312,125 @@ static inline uint32_t cycles_to_us(uint32_t cycles)
 			  sys_clock_hw_cycles_per_sec());
 }
 
-static void capture_forever(void)
+static void capture_loop(void)
 {
 	static uint8_t opus_packet[OPUS_MAX_PACKET];
-	uint32_t block_count = 0;
-	uint32_t stall_count = 0;
+	uint32_t block_count;
+	uint32_t stall_count;
 
 	while (true) {
-		void *buffer;
-		size_t size;
-		int ret;
+		/* Idle: PDM off, sleep until a debounced button press. */
+		while (!button_pressed()) {
+			k_event_wait(&rec_events, REC_BTN_EVT, false,
+				     K_FOREVER);
+		}
 
-		ret = dmic_read(dmic_dev, 0, &buffer, &size, READ_TIMEOUT_MS);
-		if (ret == -EAGAIN) {
-			/* The PDM driver stops permanently if the slab ever
-			 * runs dry (e.g. a long flash erase stalls the loop
-			 * during recording). Restart capture after a sustained
-			 * stall instead of staying silent forever. */
-			if (++stall_count >= 5U) {
-				LOG_WRN("PDM stalled, restarting capture "
-					"(max feed %u us, max misc %u us)",
-					max_feed_us, max_misc_us);
-				max_feed_us = 0;
-				max_misc_us = 0;
-				(void)configure_dmic(false);
-				if (start_capture() == 0) {
-					stall_count = 0;
-				}
-			}
+		if (start_capture() < 0) {
 			continue;
 		}
-		if (ret != 0) {
-			LOG_ERR("DMIC read failed: %d", ret);
-			return;
+#if defined(CONFIG_FILE_SYSTEM)
+		if (recorder_start() < 0) {
+			stop_capture();
+			continue;
 		}
+#endif
+		update_rec_led();
+		block_count = 0;
 		stall_count = 0;
 
-#if CONFIG_PDM_DEMO_GAIN_DB > 0 && !defined(CONFIG_PDM_TEST_ONLY)
-		apply_gain(buffer, size);
+		while (true) {
+			void *buffer;
+			size_t size;
+			int ret;
+
+			ret = dmic_read(dmic_dev, 0, &buffer, &size,
+					READ_TIMEOUT_MS);
+			if (ret == -EAGAIN) {
+				/* The PDM driver stops permanently if the
+				 * slab ever runs dry (e.g. a long flash
+				 * erase stalls the loop). Restart capture
+				 * after a sustained stall instead of
+				 * staying silent forever. */
+				if (++stall_count >= 5U) {
+					LOG_WRN("PDM stalled, restarting "
+						"capture (max feed %u us, "
+						"max misc %u us)",
+						max_feed_us, max_misc_us);
+					max_feed_us = 0;
+					max_misc_us = 0;
+					(void)configure_dmic(false);
+					if (start_capture() == 0) {
+						stall_count = 0;
+					}
+				}
+			} else if (ret != 0) {
+				LOG_ERR("DMIC read failed: %d", ret);
+				break;
+			} else {
+				stall_count = 0;
+
+#if CONFIG_PDM_DEMO_GAIN_DB > 0
+				apply_gain(buffer, size);
 #endif
 
-		int nb = opus_enc_encode(buffer, opus_packet,
-					 sizeof(opus_packet));
+				int nb = opus_enc_encode(buffer, opus_packet,
+							 sizeof(opus_packet));
 
-		uint32_t c0 = k_cycle_get_32();
+				uint32_t c0 = k_cycle_get_32();
 
 #if defined(CONFIG_FILE_SYSTEM)
-		if (nb > 0) {
-			recorder_feed_frame(opus_packet, (uint16_t)nb);
-		}
+				if (nb > 0) {
+					recorder_feed_frame(opus_packet,
+							    (uint16_t)nb);
+				}
+#else
+				ARG_UNUSED(nb);
 #endif
 
-		uint32_t c1 = k_cycle_get_32();
+				uint32_t c1 = k_cycle_get_32();
 
-		k_mem_slab_free(&audio_mem_slab, buffer);
-		++block_count;
+				k_mem_slab_free(&audio_mem_slab, buffer);
+				++block_count;
 
-		handle_button_events();
+				update_rec_led();
+
+				uint32_t c2 = k_cycle_get_32();
+				uint32_t feed_us = cycles_to_us(c1 - c0);
+				uint32_t misc_us = cycles_to_us(c2 - c1);
+
+				if (feed_us > max_feed_us) {
+					max_feed_us = feed_us;
+				}
+				if (misc_us > max_misc_us) {
+					max_misc_us = misc_us;
+				}
+
+				if ((block_count % 100U) == 0U) {
+					log_stats(block_count, size);
+				}
+			}
+
+			/* Stop on a second press, or when the recorder hit
+			 * the CONFIG_PDM_DEMO_REC_SECONDS cap and closed the
+			 * file by itself. */
+			if (button_pressed()) {
+				break;
+			}
+#if defined(CONFIG_FILE_SYSTEM)
+			if (!recorder_is_recording()) {
+				break;
+			}
+#endif
+		}
+
+		/* Stop PDM first (no new frames), then flush the file. */
+		stop_capture();
+#if defined(CONFIG_FILE_SYSTEM)
+		if (recorder_is_recording()) {
+			recorder_stop();
+		}
+#endif
 		update_rec_led();
-
-		uint32_t c2 = k_cycle_get_32();
-		uint32_t feed_us = cycles_to_us(c1 - c0);
-		uint32_t misc_us = cycles_to_us(c2 - c1);
-
-		if (feed_us > max_feed_us) {
-			max_feed_us = feed_us;
-		}
-		if (misc_us > max_misc_us) {
-			max_misc_us = misc_us;
-		}
-
-		if ((block_count % 100U) == 0U) {
-			log_stats(block_count, size);
-		}
 	}
 }
 
@@ -370,13 +446,9 @@ int main(void)
 	LOG_INF("%s PDM Opus recorder ready", CONFIG_BOARD);
 	LOG_INF("PDM20 CLK=P1.12 DIN=P1.11, PCM=%u Hz/%u-bit",
 		CONFIG_PDM_DEMO_SAMPLE_RATE, SAMPLE_BIT_WIDTH);
-	LOG_INF("PDM capture starts automatically");
+	LOG_INF("Press Button 0 to start/stop recording");
 
-	if (start_capture() < 0) {
-		return 0;
-	}
-
-	capture_forever();
+	capture_loop();
 
 	return 0;
 }

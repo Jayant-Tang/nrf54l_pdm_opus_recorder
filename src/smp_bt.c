@@ -23,6 +23,10 @@ LOG_MODULE_REGISTER(smp_bt, LOG_LEVEL_INF);
 
 static struct k_work advertise_work;
 
+/* 200 ms interval (in 0.625 ms units): much lower idle current than
+ * BT_LE_ADV_CONN_FAST_1 (~50 ms), still connects quickly enough. */
+#define ADV_INTERVAL_200MS	0x140
+
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 	BT_DATA_BYTES(BT_DATA_UUID128_ALL, SMP_BT_SVC_UUID_VAL),
@@ -35,8 +39,10 @@ static const struct bt_data sd[] = {
 
 static void advertise(struct k_work *work)
 {
-	int rc = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad),
-				 sd, ARRAY_SIZE(sd));
+	int rc = bt_le_adv_start(
+		BT_LE_ADV_PARAM(BT_LE_ADV_OPT_CONN, ADV_INTERVAL_200MS,
+				ADV_INTERVAL_200MS, NULL),
+		ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 
 	if (rc) {
 		LOG_ERR("Advertising failed to start (rc %d)", rc);

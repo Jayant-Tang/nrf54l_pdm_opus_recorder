@@ -1,8 +1,7 @@
 menu "PDM & Encoder audio demo"
 
 # The application image always includes the Opus encoder (CONFIG_OPUS=y
-# in prj.conf); PDM_TEST_ONLY only skips the encode call in the capture
-# loop. Opus is fixed-point only, so no FPU is needed.
+# in the base configs). Opus is fixed-point only, so no FPU is needed.
 
 choice
 	prompt "PCM sample rate"
@@ -58,14 +57,6 @@ config PDM_DEMO_MONO_RIGHT
 	bool "Mono right"
 
 endchoice
-
-config PDM_TEST_ONLY
-	bool "Capture PDM without Opus encoding (power baseline)"
-	default n
-	help
-	  Discard captured PCM blocks right after dmic_read(). Enable this
-	  only for plain PDM power measurements. By default blocks are
-	  encoded with Opus instead.
 
 choice
 	prompt "PCM DMA block duration"
@@ -131,20 +122,20 @@ config PDM_DEMO_GAIN_DB
 	  Fixed-point gain applied to every PCM sample ahead of the Opus
 	  encoder (gain after compression would need a decode/gain/re-encode
 	  round trip). 6 dB doubles the amplitude. Too much gain clips loud
-	  sounds (samples saturate at int16 range). Ignored in PDM_TEST_ONLY
-	  builds, where the encode path is skipped entirely.
+	  sounds (samples saturate at int16 range).
 
 config PDM_DEMO_REC_SECONDS
-	int "Recording length per button press (seconds)"
-	default 10
-	range 1 300
+	int "Maximum recording length (seconds)"
+	default 300
+	range 1 3600
 	help
-	  Pressing Button 0 saves this many seconds of Opus audio to one
-	  file on the external flash. While a clip is being recorded,
-	  further button presses are ignored.
+	  Recording is toggled with Button 0; this is the safety cap at
+	  which a recording stops and the file is saved automatically,
+	  so a forgotten recording cannot fill the flash.
 
 # The Opus encoder state is malloc'ed at startup (measured 43308 bytes
-# at 16 kHz stereo, fixed-point), also in PDM_TEST_ONLY builds.
+# at 16 kHz stereo, fixed-point), in all configurations including
+# test_only (encoder created but its output discarded).
 config HEAP_MEM_POOL_SIZE
 	default 131072
 

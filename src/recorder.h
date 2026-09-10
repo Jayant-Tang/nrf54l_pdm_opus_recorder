@@ -17,6 +17,11 @@ int recorder_init(void);
  * Returns -EBUSY while a previous clip is still being recorded. */
 int recorder_start(void);
 
+/* Flush and close the current clip (no-op when not recording). Called
+ * automatically at the CONFIG_PDM_DEMO_REC_SECONDS cap; call it to stop
+ * early (button). */
+void recorder_stop(void);
+
 /* Feed one encoded Opus frame; written only while recording. The file is
  * synced and closed automatically after CONFIG_PDM_DEMO_REC_SECONDS. */
 void recorder_feed_frame(const uint8_t *data, uint16_t len);

@@ -259,7 +259,7 @@ int recorder_start(void)
 		goto out_pm_put;
 	}
 
-	LOG_INF("Recording %s (%u s, %u frames)", cur_path,
+	LOG_INF("Recording %s (max %u s, %u frames)", cur_path,
 		CONFIG_PDM_DEMO_REC_SECONDS, REC_FRAMES);
 	return 0;
 
@@ -269,8 +269,11 @@ out_pm_put:
 	return ret;
 }
 
-static void recorder_stop(void)
+void recorder_stop(void)
 {
+	if (!recording) {
+		return;
+	}
 	(void)write_pages(true); /* flush the partial last page */
 	ogg_stream_clear(&ogg_stream);
 	(void)fs_sync(&rec_file);

@@ -6,9 +6,9 @@ built on the Zephyr DMIC API (NCS v3.4.0).
 ## 1. Features and usage
 
 Continuous PDM capture → real-time Opus compression → one button press
-saves the next few seconds as a `.opus` file (LittleFS on external flash,
-LED indicates recording) → files are transferred to a PC or phone over
-SMP (MCUMgr) via UART or BLE.
+saves the audio as a `.opus` file (LittleFS on external flash,
+LED indicates recording) → files are transferred to a phone over
+SMP (MCUMgr) via BLE.
 
 ```mermaid
 flowchart LR
@@ -16,34 +16,25 @@ flowchart LR
     pdm -->|"PCM 16 kHz/16-bit"| enc["Opus encoder"]
     enc -->|"Opus frames"| rec["recorder (Ogg container)"]
     rec -->|"fs_write"| lfs[("LittleFS /lfs1 (MX25R64)")]
-    btn["Button 0"] -->|"record N s"| rec
+    btn["Button 0"] -->|"start/stop"| rec
     rec --> led0["LED0 recording indicator"]
     lfs --- smp["MCUMgr (fs / shell / os)"]
-    smp --- uart["UART: uart30 = VCOM0"]
-    smp --- ble["BLE: PDM_SMP"]
-    uart --- pc["PC: mcumgr CLI / AuTem"]
+    smp --- ble["BLE: PDM_SMP (200ms adv)"]
     ble --- phone["Phone: nRF Connect Device Manager"]
 ```
 
 ### How to operate
 
-1. Capture and encoding start automatically at boot; nothing is stored.
-2. **Press Button 0**: the next `CONFIG_PDM_DEMO_REC_SECONDS` (default 10)
-   seconds are written to `/lfs1/rec_XXXX.opus`; **LED0 is on** while
-   recording and turns off when the file is saved. Further presses during
-   a recording are ignored.
-3. Retrieve files:
-   - **PC over UART**: MCUMgr is on VCOM0 (usually the first COM port on
-     Windows, 115200 8N1); logs are on VCOM1 (second COM port).
-
-     ```powershell
-     mcumgr --conntype serial --connstring dev=COM3,baud=115200 shell exec fs ls /lfs1
-     mcumgr --conntype serial --connstring dev=COM3,baud=115200 fs download /lfs1/rec_0000.opus rec_0000.opus
-     ```
-
-   - **Phone over BLE**: connect to `PDM_SMP` (no pairing). The Android
-     nRF Connect Device Manager app has a Shell tab — run `fs ls /lfs1`
-     directly.
+1. PDM stays off after boot; the main thread sleeps waiting for the
+   button (low power).
+2. **Press Button 0 once** to start recording: PDM capture + Opus
+   encoding + streaming to `/lfs1/rec_XXXX.opus`, **LED0 on**. **Press
+   again** to stop and save, LED0 off. Recording stops automatically at
+   the `CONFIG_PDM_DEMO_REC_SECONDS` cap (default 300 s) so a forgotten
+   recording cannot fill the flash.
+3. Retrieve files over BLE (device name `PDM_SMP`, no pairing):
+   - **Android**: nRF Connect Device Manager has a Shell tab — run
+     `fs ls /lfs1` directly; the Files tab downloads by path.
    - **iOS**: Device Manager has no Shell tab and SMP has no "list
      directory" command, so download the fixed path `/lfs1/index.txt`
      first (refreshed at boot and after every recording, lists all files
@@ -61,7 +52,7 @@ Debug firmware prints statistics every 100 blocks on the log port
 - **PDM peripheral**: PDM20, ratio 50, 800 kHz PDM clock, `H0H1` drive
 - **External flash**: on-board MX25R64 (spi00 @ 32 MHz), whole 8 MB
   mounted as LittleFS at `/lfs1`
-- **UARTs**: VCOM0 = uart30 = MCUMgr; VCOM1 = uart20 = logging
+- **UARTs**: VCOM1 = uart20 = logging
 
 ### PDM wiring
 
@@ -124,8 +115,9 @@ west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_release . --no-sy
 west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_release_mono . --no-sysbuild `
     -- "-DFILE_SUFFIX=release" "-DCONFIG_PDM_DEMO_MONO_LEFT=y"
 
-# Plain PDM power baseline (standalone base config prj_test_only.conf:
-# no encoding, no storage, no SMP/BLE)
+# Plain PDM+Opus power baseline (standalone base config
+# prj_test_only.conf: button-toggled PDM+Opus encoding, no storage,
+# no LED, no SMP/BLE, no serial)
 west build -p always -b nrf54lm20dk/nrf54lm20b/cpuapp -d build_test_only . --no-sysbuild `
     -- "-DFILE_SUFFIX=test_only"
 ```
@@ -177,12 +169,10 @@ defaults):
   saturation). 6 dB doubles the amplitude; too much clips loud sounds.
   Gain must live before compression — Opus packets cannot be scaled
   linearly, so post-compression gain would need a decode/gain/re-encode
-  round trip. Ignored in `PDM_TEST_ONLY` builds.
-- `CONFIG_PDM_DEMO_REC_SECONDS` (default 10): recording length per button
-  press.
-- `CONFIG_PDM_TEST_ONLY` (default n): plain PDM power baseline; blocks are
-  discarded right after `dmic_read()`. Use `prj_test_only.conf` for the
-  actual build (it also disables flash/SMP/BLE), see section 4.
+  round trip.
+- `CONFIG_PDM_DEMO_REC_SECONDS` (default 300): maximum recording length.
+  Recording is toggled with Button 0; at this cap the file is saved
+  automatically so a forgotten recording cannot fill the flash.
 
 Software structure: each module self-initializes via `SYS_INIT`
 (APPLICATION level, priorities `opus_enc` 50 → `recorder` 60 (LittleFS
@@ -197,6 +187,6 @@ Other notable items:
 - `clk-frequency-min/max = 795000/805000` in the overlays excludes ratio
   48 and forces 800 kHz / ratio 50, giving exactly 16 kHz PCM.
 - External flash SPI clock is 32 MHz (SPIM00 maximum: 128 MHz core / 4).
-- MCUMgr: fs / os / shell groups enabled; UART (uart30) + BLE (`PDM_SMP`,
-  no pairing) transports; `CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2304` is the
-  minimum for fs uploads.
+- MCUMgr: fs / os / shell groups enabled; BLE-only transport (`PDM_SMP`,
+  no pairing, 200 ms advertising interval);
+  `CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2304` is the minimum for fs uploads.

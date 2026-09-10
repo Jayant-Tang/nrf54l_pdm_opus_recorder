@@ -51,12 +51,6 @@ int opus_enc_init(void)
 
 int opus_enc_encode(const void *pcm, uint8_t *pkt, size_t cap)
 {
-#if defined(CONFIG_PDM_TEST_ONLY)
-	ARG_UNUSED(pcm);
-	ARG_UNUSED(pkt);
-	ARG_UNUSED(cap);
-	return 0;
-#else
 	uint32_t start_cycles = k_cycle_get_32();
 	int nb_bytes = opus_encode(opus_enc, pcm, OPUS_FRAME_SAMPLES, pkt, cap);
 	uint32_t encode_us =
@@ -82,7 +76,6 @@ int opus_enc_encode(const void *pcm, uint8_t *pkt, size_t cap)
 	}
 
 	return nb_bytes;
-#endif
 }
 
 void opus_enc_get_stats(uint64_t *bytes_total, uint32_t *max_us, uint32_t *err)
@@ -96,9 +89,7 @@ int opus_enc_get_lookahead(void)
 {
 	int lookahead = 0;
 
-#if !defined(CONFIG_PDM_TEST_ONLY)
 	opus_encoder_ctl(opus_enc, OPUS_GET_LOOKAHEAD(&lookahead));
-#endif
 	return lookahead;
 }
 
