@@ -19,6 +19,23 @@
 
 LOG_MODULE_REGISTER(opus_enc, LOG_LEVEL_INF);
 
+/* Build-time real-time budget check. Measured on the nRF54LM20
+ * (128 MHz Cortex-M33, fixed-point, complexity 0): encoding costs at
+ * most ~15 us per sample (both channels counted) - a 16 kHz stereo
+ * 20 ms frame (640 samples) takes ~9.7 ms. Encode time scales with the
+ * number of samples per frame, so require the estimate to fit in 75%
+ * of the block period, leaving the rest for flash writes on the same
+ * thread. 48 kHz stereo fails this at any frame length; 24 kHz stereo
+ * is marginal. Higher complexity needs extra headroom not modeled
+ * here. */
+#define OPUS_ENC_US_PER_SAMPLE	15U
+
+BUILD_ASSERT(OPUS_FRAME_SAMPLES * CHANNEL_COUNT * OPUS_ENC_US_PER_SAMPLE <=
+	     (CONFIG_PDM_DEMO_BLOCK_MS * 1000U) * 3U / 4U,
+	     "Opus encode estimate exceeds 75% of the block period: "
+	     "lower the sample rate or channel count, or raise "
+	     "PDM_DEMO_BLOCK_MS");
+
 static OpusEncoder *opus_enc;
 
 static uint32_t opus_frame_count;

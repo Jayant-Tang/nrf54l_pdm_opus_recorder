@@ -90,7 +90,6 @@ Sample rate choice:
 - `CONFIG_PDM_DEMO_SAMPLE_RATE_12000`
 - `CONFIG_PDM_DEMO_SAMPLE_RATE_16000` (default)
 - `CONFIG_PDM_DEMO_SAMPLE_RATE_24000`
-- `CONFIG_PDM_DEMO_SAMPLE_RATE_48000`
 
 Channel choice:
 
@@ -257,6 +256,29 @@ zephyr_library_compile_definitions(
 ```
 
 The current CPU performance cannot support floating-point Opus, so fixed-point arithmetic is used.
+
+### Sample rate constraints
+
+The PDM clock is derived from the configured sample rate. The driver iterates over the hardware decimation ratios (48/50/64/80/96/150/192) and tries integer division for each:
+
+```
+PDM_CLK = 32 MHz / prescaler    (prescaler is an integer, 4-126)
+PCM rate = PDM_CLK / ratio
+```
+
+```mermaid
+flowchart LR
+    src["32 MHz base clock<br>(fixed)"] -->|"/ prescaler<br>integer 4-126"| clk["PDM_CLK<br>500 kHz - 2 MHz"]
+    clk -->|"/ ratio<br>48/50/64/80/96/150/192"| pcm["PCM sample rate<br>(configured target)"]
+```
+
+Both ends are fixed: the chip's 32 MHz base clock on the left, your target sample rate on the right; PDM_CLK in the middle is dialed in by the two integer coefficients, prescaler and ratio. The driver picks the combination with the smallest error inside the overlay's clock window (500 kHz - 2 MHz).
+
+Because the prescaler must be an integer, only 8 kHz (32 MHz / 50 = 640 kHz, / ratio 80) and 16 kHz (32 MHz / 40 = 800 kHz, / ratio 50) get an exact clock; 12/24/48 kHz have no integer solution, so the actual rate is off by ~0.8% (e.g. 24 kHz runs at 23810 Hz) — a barely audible pitch shift on playback.
+
+Worth noting: the search iterates ratios in ascending order and stops at the first zero-error combination, so when several exact solutions exist, the winner is always the one with the smallest ratio and lowest PDM_CLK (e.g. 16 kHz gets 800 kHz, not 1.28 MHz / ratio 80) — good for power and GPIO edge rates. This is just a side effect of the search order, not a deliberate low-power design; when no exact solution exists (12/24 kHz), all ratios are evaluated and the lowest-error one wins, which is not necessarily the lowest clock.
+
+48 kHz additionally exceeds the CPU budget (encoding takes longer than a frame), so Kconfig simply doesn't offer it. Note that 24 kHz stereo uses ~70% CPU for encoding — marginal; a build-time check in `opus_enc.c` rejects any combination whose encode estimate exceeds 75% of the frame period.
 
 ### Flash write time and the PDM buffer
 

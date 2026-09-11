@@ -66,9 +66,17 @@
 	pdm20_dmic: dmic {
 		compatible = "zephyr,pdm-dmic";
 		status = "okay";
-		/* Force 800 kHz / ratio 50 for exact 16 kHz PCM from PCLK32M. */
-		clk-frequency-min = <795000>;
-		clk-frequency-max = <805000>;
+		/* PDM clock window for the driver's prescaler/ratio search
+		 * (PDM_CLK = 32 MHz / prescaler, PCM = PDM_CLK / ratio).
+		 * 500 kHz floor still allows exact 8 kHz (640 kHz) and
+		 * best-effort 12 kHz (604 kHz); 2 MHz ceiling keeps the
+		 * clock within what a standard GPIO edge rate handles
+		 * safely. Exact rates from 32 MHz: 8/16 kHz; 12/24 kHz
+		 * land ~0.6-0.8% off; 48 kHz would need 2.29 MHz and is
+		 * excluded by the ceiling (stereo 48 kHz also exceeds the
+		 * Opus CPU budget, see opus_enc.c). */
+		clk-frequency-min = <500000>;
+		clk-frequency-max = <2000000>;
 		clk-duty-cycle-min = <40>;
 		clk-duty-cycle-max = <60>;
 		channel-left;

@@ -8,10 +8,12 @@ choice
 	default PDM_DEMO_SAMPLE_RATE_16000
 	help
 	  PCM sample rate produced by the PDM/DMIC path and fed to the Opus
-	  encoder. Only the rates Opus accepts are offered. The PDM clock
-	  range in the board overlay (clk-frequency-min/max) must allow an
-	  integer decimation ratio for the chosen rate; the current
-	  overlays force 800 kHz / ratio 50 for 16 kHz.
+	  encoder. 48 kHz is not offered: it exceeds the Opus CPU budget
+	  (stereo) and has no exact clock from 32 MHz. Of the remaining
+	  rates only 8/16 kHz have an exact PDM clock; 12/24 kHz land
+	  ~0.6-0.8% off and 24 kHz stereo is marginal on CPU. A
+	  build-time assert in opus_enc.c rejects combinations whose
+	  encode estimate exceeds 75% of the block period.
 
 config PDM_DEMO_SAMPLE_RATE_8000
 	bool "8 kHz"
@@ -25,9 +27,6 @@ config PDM_DEMO_SAMPLE_RATE_16000
 config PDM_DEMO_SAMPLE_RATE_24000
 	bool "24 kHz"
 
-config PDM_DEMO_SAMPLE_RATE_48000
-	bool "48 kHz"
-
 endchoice
 
 # Numeric form of the choice above, for arithmetic in the code.
@@ -37,7 +36,6 @@ config PDM_DEMO_SAMPLE_RATE
 	default 12000 if PDM_DEMO_SAMPLE_RATE_12000
 	default 16000 if PDM_DEMO_SAMPLE_RATE_16000
 	default 24000 if PDM_DEMO_SAMPLE_RATE_24000
-	default 48000 if PDM_DEMO_SAMPLE_RATE_48000
 
 choice
 	prompt "PDM channel configuration"
@@ -101,8 +99,9 @@ config PDM_DEMO_OPUS_COMPLEXITY
 	default 0
 	range 0 10
 	help
-	  Opus complexity setting. The default of 10 is far from real time
-	  on a 128 MHz Cortex-M33 (~250 ms per 20 ms stereo frame).
+	  Opus complexity setting. Higher values cost more CPU: complexity
+	  10 is far from real time on a 128 MHz Cortex-M33 (~250 ms per
+	  20 ms stereo frame), keep at 0 for this demo.
 
 config PDM_DEMO_GAIN_DB
 	int "Digital gain on PCM before Opus encoding (dB)"

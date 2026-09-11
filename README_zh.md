@@ -90,7 +90,6 @@ west flash -d build_pdm_only
 - `CONFIG_PDM_DEMO_SAMPLE_RATE_12000`
 - `CONFIG_PDM_DEMO_SAMPLE_RATE_16000`，是默认选项
 - `CONFIG_PDM_DEMO_SAMPLE_RATE_24000`
-- `CONFIG_PDM_DEMO_SAMPLE_RATE_48000`
 
 声道选择：
 
@@ -258,6 +257,29 @@ zephyr_library_compile_definitions(
 
 目前的 CPU 性能无法支持浮点 OPUS，使用定点计算。
 
+### 采样率约束
+
+PDM 时钟由设定的采样率反推而来。驱动遍历硬件支持的抽取比 ratio（48/50/64/80/96/150/192），对每个 ratio 尝试整数分频：
+
+```
+PDM_CLK = 32 MHz ÷ prescaler    （prescaler 为 4–126 的整数）
+PCM 采样率 = PDM_CLK ÷ ratio
+```
+
+```mermaid
+flowchart LR
+    src["32 MHz 基频<br>（固定）"] -->|"÷ prescaler<br>整数 4–126"| clk["PDM_CLK<br>500 kHz – 2 MHz"]
+    clk -->|"÷ ratio<br>48/50/64/80/96/150/192"| pcm["PCM 采样率<br>（设定的目标值）"]
+```
+
+两端都是固定的：左边是芯片的 32 MHz 基频，右边是你要的采样率；中间的 PDM_CLK 由 prescaler 和 ratio 两个整数系数凑出来。驱动在 overlay 的时钟窗口（500 kHz – 2 MHz）内取误差最小的组合。
+
+因为 prescaler 必须是整数，只有 8 kHz（32 MHz ÷ 50 = 640 kHz，÷ ratio 80）和 16 kHz（32 MHz ÷ 40 = 800 kHz，÷ ratio 50）能得到精确时钟；12/24/48 kHz 都没有整数解，实际采样率偏差约 ±0.8%（如 24 kHz 实际为 23810 Hz），播放时有几乎听不出的音调偏移。
+
+值得一提的是，遍历按 ratio 升序进行、遇到误差为 0 的组合即停止，因此存在多个精确解时，选中的总是 ratio 最小、PDM_CLK 最低的那组（如 16 kHz 选中 800 kHz，而不是 1.28 MHz ÷ ratio 80），对功耗和 GPIO 边沿压力都有利。不过这只是遍历顺序带来的副作用，并非有意的低功耗设计；没有精确解时（12/24 kHz）会遍历全部 ratio 选误差最小的组合，时钟不一定最低。
+
+48 kHz 除了时钟凑不准，CPU 也跑不动（编码耗时超过帧长），Kconfig 里直接没有这个选项。另外 24 kHz 立体声编码约占 70% CPU，比较勉强；`opus_enc.c` 的编译期检查会拦下编码估算超过帧长 75% 的组合。
+
 ### 落盘时间与 PDM Buffer
 
 SPI 需配置为 32MHz。
@@ -323,6 +345,6 @@ static void apply_gain(int16_t *samples, size_t size)
 
 构建时有一条 CMake 警告：fs_mgmt 开启了但文件访问 hook（`CONFIG_MCUMGR_GRP_FS_FILE_ACCESS_HOOK`）未启用。这是权限拦截机制，不是功能开关——不开它，手机端的上传/下载功能完全正常。
 
-开启后，每次文件操作（下载/上传/查状态/算 hash）前，fs_mgmt 会通过`mgmt_callback_notify(MGMT_EVT_OP_FS_MGMT_FILE_ACCESS, ...)` 回调应用，应用可按路径和操作类型（READ/WRITE）放行、拒绝或改写路径。
+开启后，每次文件操作（下载/上传/查状态/算 hash）前，fs_mgmt 会通过 `mgmt_callback_notify(MGMT_EVT_OP_FS_MGMT_FILE_ACCESS, ...)` 回调应用，应用可按路径和操作类型（READ/WRITE）放行、拒绝或改写路径。
 
 本工程是 Demo，BLE 无配对广播，故意不开 hook：任何能连上的设备都能读写 `/lfs1` 下任意文件。产品化时建议开启并配白名单（例如只放行 `/lfs1/rec_*.opus` 的读取、拒绝一切写入），更根本的做法是给 SMP 加配对加密。
