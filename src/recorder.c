@@ -167,7 +167,7 @@ static int write_pages(bool flush)
 					 1000000U / sys_clock_hw_cycles_per_sec());
 
 		if (us > 20000U) {
-			LOG_WRN("slow fs_write: %u us (hdr %u body %u)", us,
+			LOG_WRN("slow fs_write: %u us (hdr %ld body %ld)", us,
 				og.header_len, og.body_len);
 		}
 		if (rc < 0 || rc2 < 0) {

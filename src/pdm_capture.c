@@ -45,11 +45,16 @@ BUILD_ASSERT((AUDIO_BLOCK_SIZE % 4) == 0, "Audio block must be 4-byte aligned");
 /* The sample rate is constrained to Opus-legal values by the Kconfig
  * choice, so no BUILD_ASSERT is needed here. */
 
-/* DMA buffers: CONFIG_PDM_DEMO_BLOCK_COUNT blocks of AUDIO_BLOCK_SIZE.
+/* DMA buffers: one slab block per driver queue entry. The devicetree
+ * queue-size is the single source of truth: the driver caps its queue of
+ * filled, unread blocks at queue-size, so a slab of the same size covers
+ * the queue plus the DMA double-buffer while the consumer is stalled.
  * 16 x 20 ms = 320 ms of slack, sized to cover a LittleFS block erase
  * during recording (MX25R64 4 KB sector erase, max ~300 ms). */
+#define AUDIO_BLOCK_COUNT	DT_PROP(PDM_NODE, queue_size)
+
 K_MEM_SLAB_DEFINE_STATIC(audio_mem_slab, AUDIO_BLOCK_SIZE,
-			 CONFIG_PDM_DEMO_BLOCK_COUNT, 4);
+			 AUDIO_BLOCK_COUNT, 4);
 
 static const struct device *const dmic_dev = DEVICE_DT_GET(PDM_NODE);
 

@@ -92,19 +92,9 @@ config PDM_DEMO_BLOCK_MS
 	default 40 if PDM_DEMO_BLOCK_MS_40
 	default 60 if PDM_DEMO_BLOCK_MS_60
 
-config PDM_DEMO_BLOCK_COUNT
-	int "Number of PCM DMA blocks"
-	default 16
-	range 4 16
-	help
-	  Number of blocks reserved for the DMIC driver and application.
-	  The minimum of 4 matches the driver queue-size in the board
-	  overlays; fewer blocks would starve the DMA queue at startup.
-	  More blocks only add buffering latency. The default of 16 gives
-	  ~320 ms of slack (at 20 ms blocks) so that a LittleFS block
-	  erase during recording (MX25R64 4 KB sector erase: typ 60 ms,
-	  max 300 ms) does not exhaust the slab; the PDM driver stops
-	  permanently when buffer allocation fails.
+# The number of PCM DMA blocks is not a Kconfig: it is derived from the
+# devicetree `queue-size` property of the pdm20 node (single source of
+# truth, see pdm_capture.c).
 
 config PDM_DEMO_OPUS_COMPLEXITY
 	int "Opus encoder complexity (0-10)"
@@ -135,6 +125,7 @@ config PDM_DEMO_REC_SECONDS
 
 config PDM_DEMO_PDM_ONLY
 	bool "PDM + Opus only power baseline (no storage, LED or BLE)"
+    default n
 	help
 	  Pure PDM capture + Opus encoding mode for power measurement:
 	  the encoded frames are discarded, and recording to flash, the
