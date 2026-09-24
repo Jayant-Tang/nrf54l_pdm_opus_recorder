@@ -7,7 +7,8 @@ Environment: nRF Connect SDK v3.4.0
 ## Features and usage
 
 1. Button-triggered PDM recording → real-time Opus compression → stored as `.opus` files on external SPI flash
-2. `.opus` files can be downloaded to a phone over BLE via SMP (MCUMgr)
+2. Long-press Button 1 to delete all recordings
+3. `.opus` files can be downloaded to a phone over BLE via SMP (MCUMgr)
 
 ## Architecture
 
@@ -127,7 +128,8 @@ Standalone PDM power-evaluation mode. PDM capture + Opus encoding only, no stora
 
 1. After power-up PDM is off; only BLE advertising runs. The Debug build has logging; the Release build is low power.
 2. **Press Button 0 once** to start recording: PDM capture + Opus encoding + streaming to `/lfs1/rec_XXXX.opus`, **LED0 on**; **press again** to stop and save, LED0 off. Recording stops automatically after `CONFIG_PDM_DEMO_REC_SECONDS` (default 300) seconds to prevent flash overflow. The 64 Mbit flash holds about 60 minutes of audio at most.
-3. Retrieve files (BLE, device name `PDM_SMP`, no pairing):
+3. **Long-press Button 1 (3 s)** to delete all recordings: removes every `rec_XXXX.opus` on `/lfs1` and refreshes `index.txt`; the file index restarts at `rec_0000.opus`. **LED1 is on** while erasing. A delete requested during recording runs after the current clip stops.
+4. Retrieve files (BLE, device name `PDM_SMP`, no pairing):
    - **Android**: use the nRF Connect Device Manager phone app. Run `fs ls /lfs1` in the Shell tab to list all files; download by file path in the Files tab.
    - **iOS**: the Device Manager app has no Shell tab yet. First download the fixed path `/lfs1/index.txt` (refreshed at boot and after every recording, containing all file names and sizes), then download by full path. The in-app Preview does not support `.opus`; save the file to the phone and play it in a file manager.
 

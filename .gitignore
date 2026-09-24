@@ -2,6 +2,7 @@ build*/
 .agent/
 .claude/
 .cursor/
+.codegraph/
 
 # VS Code
 *.code-workspace

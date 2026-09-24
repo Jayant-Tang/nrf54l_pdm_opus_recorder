@@ -8,8 +8,8 @@
  * PDM capture starts automatically after boot.
  */
 
-/* LittleFS auto-mounts at /lfs1. */
 / {
+	/* LittleFS auto-mounts at /lfs1. */
 	fstab {
 		compatible = "zephyr,fstab";
 
@@ -31,6 +31,24 @@
 			cache-size = <512>;
 			lookahead-size = <32>;
 			block-cycles = <512>;
+		};
+	};
+
+	/* Buttons used by the demo, re-declared from the board dts so the
+	 * app does not silently break if the board defaults ever change:
+	 *   Button 0 (P1.13): start/stop recording
+	 *   Button 1 (P1.9):  long-press deletes all recordings */
+	buttons {
+		button_0 {
+			gpios = <&gpio1 13 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Push button 0";
+			zephyr,code = <INPUT_KEY_0>;
+		};
+
+		button_1 {
+			gpios = <&gpio1 9 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Push button 1";
+			zephyr,code = <INPUT_KEY_1>;
 		};
 	};
 };
@@ -84,11 +102,11 @@
 	};
 };
 
-/* Button 0 (P1.13): use the GPIO sense mechanism (port event) for edge
- * detection instead of a GPIOTE pin-event channel.
- */
+/* Buttons 0/1 (P1.13, P1.9): use the GPIO sense mechanism (port event)
+ * for edge detection instead of GPIOTE pin-event channels. The mask is
+ * per-pin, so every button pin must be listed explicitly. */
 &gpio1 {
-	sense-edge-mask = <BIT(13)>;
+	sense-edge-mask = <(BIT(13) | BIT(9))>;
 };
 
 /* Runtime PM for the console UART and the external-flash SPI bus;

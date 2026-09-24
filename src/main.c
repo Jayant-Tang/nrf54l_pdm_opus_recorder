@@ -12,7 +12,7 @@
  * PDM stays off at idle. Pressing Button 0 starts capture and records
  * Opus audio to /lfs1/rec_XXXX.opus; pressing it again (or reaching
  * CONFIG_PDM_DEMO_REC_SECONDS) stops and saves. LED0 is on while
- * recording.
+ * recording. Long-pressing Button 1 deletes all recordings.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -51,6 +51,7 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_FILE_SYSTEM) && !IS_ENABLED(CONFIG_BT),
 /* --- Button 0 / LED 0 (NCS DK library, debounce built in) --- */
 
 #define REC_BTN_EVT	BIT(0)
+#define DEL_BTN_EVT	BIT(1)
 
 /* The DK library numbers buttons/LEDs from 1 (an nRF52 DK legacy),
  * while the nRF54L DK silkscreen and devicetree number them from 0:
@@ -58,12 +59,30 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_FILE_SYSTEM) && !IS_ENABLED(CONFIG_BT),
 #define REC_BTN_MSK	DK_BTN1_MSK
 #define REC_LED		DK_LED1
 
+/* Long-press Button 1 (DK library DK_BTN2) to delete all recordings. */
+#define DEL_BTN_MSK		DK_BTN2_MSK
+#define DEL_LED			DK_LED2
+#define DEL_LONG_PRESS_MS	3000
+
 static K_EVENT_DEFINE(rec_events);
 
 /* Desired recording state, toggled by the debounced button callback
  * (system workqueue context); the main loop turns it into actual
  * capture start/stop. */
 static volatile bool rec_active;
+
+/* Long-press detection: the debounced DK handler only reports edges,
+ * so a press arms a delayed work and a release cancels it; if it
+ * expires, the button has been held for DEL_LONG_PRESS_MS. */
+static void del_work_handler(struct k_work *work);
+
+static K_WORK_DELAYABLE_DEFINE(del_work, del_work_handler);
+
+static void del_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	k_event_post(&rec_events, DEL_BTN_EVT);
+}
 
 static void button_handler(uint32_t state, uint32_t changed)
 {
@@ -75,6 +94,15 @@ static void button_handler(uint32_t state, uint32_t changed)
 #endif
 		k_event_post(&rec_events, REC_BTN_EVT);
 	}
+
+	if (changed & DEL_BTN_MSK) {
+		if (state & DEL_BTN_MSK) {
+			k_work_reschedule(&del_work,
+					  K_MSEC(DEL_LONG_PRESS_MS));
+		} else {
+			(void)k_work_cancel_delayable(&del_work);
+		}
+	}
 }
 
 /* LED is part of the storage demo only; the pdm_only configuration is a
@@ -85,6 +113,24 @@ static void rec_led_off(void)
 	(void)dk_set_led_off(REC_LED);
 #endif
 }
+
+#if RECORDER_ENABLED
+/* Delete all recordings (long-press path). LED1 is on while erasing. */
+static void delete_all_recordings(void)
+{
+	int ret;
+
+	(void)dk_set_led_on(DEL_LED);
+	ret = recorder_delete_all();
+	(void)dk_set_led_off(DEL_LED);
+
+	if (ret >= 0) {
+		LOG_INF("Deleted all recordings (%d file(s))", ret);
+	} else {
+		LOG_WRN("Delete all failed: %d", ret);
+	}
+}
+#endif
 
 /* --- PCM gain (applied before Opus encoding) --- */
 
@@ -162,8 +208,20 @@ static void capture_loop(void)
 	static uint8_t opus_packet[OPUS_MAX_PACKET];
 
 	while (true) {
-		/* Idle: PDM off, sleep until the button toggles rec_active. */
-		k_event_wait(&rec_events, REC_BTN_EVT, true, K_FOREVER);
+		/* Idle: PDM off, sleep until the button toggles rec_active
+		 * or a long press requests a delete-all. A delete request
+		 * posted during recording is handled once the clip ends. */
+		uint32_t evt = k_event_wait(&rec_events,
+					    REC_BTN_EVT | DEL_BTN_EVT,
+					    true, K_FOREVER);
+
+#if RECORDER_ENABLED
+		if (evt & DEL_BTN_EVT) {
+			delete_all_recordings();
+		}
+#else
+		ARG_UNUSED(evt);
+#endif
 		if (!rec_active) {
 			continue; /* stop press while idle: ignore */
 		}
@@ -241,6 +299,10 @@ int main(void)
 	LOG_INF("PDM20 CLK=P1.12 DIN=P1.11, PCM=%u Hz/%u-bit",
 		CONFIG_PDM_DEMO_SAMPLE_RATE, SAMPLE_BIT_WIDTH);
 	LOG_INF("Press Button 0 to start/stop recording");
+#if RECORDER_ENABLED
+	LOG_INF("Long-press Button 1 (%u ms) to delete all recordings",
+		DEL_LONG_PRESS_MS);
+#endif
 
 	capture_loop();
 

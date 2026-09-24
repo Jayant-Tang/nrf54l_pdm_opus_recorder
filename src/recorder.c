@@ -288,6 +288,64 @@ void recorder_stop(void)
 	(void)pm_device_runtime_put(rec_flash);
 }
 
+/* Delete the first rec_* file found; returns 1 when one was deleted,
+ * 0 when none remain. Re-scanning from the top after each unlink keeps
+ * littlefs directory iteration sane (entry offsets shift on delete). */
+static int delete_first_recording(void)
+{
+	struct fs_dir_t dir;
+	struct fs_dirent ent;
+	/* Sized for the worst-case dirent name so no truncation is possible. */
+	char path[sizeof(REC_MOUNT_POINT "/") + MAX_FILE_NAME];
+	int deleted = 0;
+
+	fs_dir_t_init(&dir);
+	if (fs_opendir(&dir, REC_MOUNT_POINT) < 0) {
+		return 0;
+	}
+
+	while (fs_readdir(&dir, &ent) == 0 && ent.name[0] != '\0') {
+		if (ent.type == FS_DIR_ENTRY_FILE &&
+		    strncmp(ent.name, "rec_", 4) == 0) {
+			snprintk(path, sizeof(path), "%s/%s",
+				 REC_MOUNT_POINT, ent.name);
+			if (fs_unlink(path) == 0) {
+				deleted = 1;
+			} else {
+				LOG_ERR("unlink %s failed", path);
+			}
+			break;
+		}
+	}
+	(void)fs_closedir(&dir);
+	return deleted;
+}
+
+int recorder_delete_all(void)
+{
+	int count = 0;
+
+	if (recording) {
+		return -EBUSY;
+	}
+
+	/* Pin flash + SPI bus active for the whole erase run. */
+	(void)pm_device_runtime_get(rec_flash);
+	(void)pm_device_runtime_get(rec_spi);
+
+	while (delete_first_recording() > 0) {
+		count++;
+	}
+	file_index = 0;
+	update_index();
+
+	(void)pm_device_runtime_put(rec_spi);
+	(void)pm_device_runtime_put(rec_flash);
+
+	LOG_INF("Deleted %d recording(s)", count);
+	return count;
+}
+
 void recorder_feed_frame(const uint8_t *data, uint16_t len)
 {
 	ogg_packet op;

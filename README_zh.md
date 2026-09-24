@@ -7,7 +7,8 @@ nRF54L15 / nRF54LM20 上的 PDM 录音与功耗评估 Demo
 ## 功能与操作
 
 1. 按键触发PDM 录音 → 实时 Opus 压缩 → 在外部 SPI Flash存储为 `.opus`文件
-2. 可通过 SMP（MCUMgr），在手机上用 BLE 下载`.opus`文件
+2. 长按 Button 1 删除全部录音文件
+3. 可通过 SMP（MCUMgr），在手机上用 BLE 下载`.opus`文件
 
 ## 架构
 
@@ -127,7 +128,8 @@ PDM功耗单独评估模式。只有 PDM 录制和 OPUS编码，不存储。用�
 
 1. 上电后 PDM 关闭，只有 BLE 广播。Debug 版本有日志，Release 版本低功耗。
 2. **按一下 Button 0** 开始录音：PDM 采集 + Opus 编码 + 实时写入`/lfs1/rec_XXXX.opus`，**LED0 亮**；**再按一下**停止并保存，LED0 灭。最长录音 `CONFIG_PDM_DEMO_REC_SECONDS`（默认 300）秒后自动停止，防止 flash 溢出。64M Bits Flash 最多录制约60分钟。
-3. 取文件（BLE，蓝牙设备名 `PDM_SMP`，无配对）：
+3. **长按 Button 1（3 秒）** 删除全部录音：删除 `/lfs1` 下所有 `rec_XXXX.opus` 并刷新 `index.txt`，文件编号重新从 `rec_0000.opus` 开始，删除期间 **LED1 亮**。录音进行中触发的删除会在当前录音停止后执行。
+4. 取文件（BLE，蓝牙设备名 `PDM_SMP`，无配对）：
    - **Android**：使用 nRF Connect Device Manager 手机 APP。在 Shell 页执行`fs ls /lfs1` 命令查看所有文件；在 Files 页按文件路径名下载。
    - **iOS**：Device Manager APP 暂无 Shell 页。先下载固定路径 `/lfs1/index.txt`（启动和每次录音后自动刷新，含全部文件名和大小），再按完整路径下载。App 内 Preview 不支持 `.opus`，下载后保存到手机在文件管理器中可播放。
 

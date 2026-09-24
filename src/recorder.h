@@ -28,4 +28,8 @@ void recorder_feed_frame(const uint8_t *data, uint16_t len);
 
 bool recorder_is_recording(void);
 
+/* Delete every rec_*.opus on /lfs1 and reset the file index to 0.
+ * Returns the number of deleted files, or -EBUSY while recording. */
+int recorder_delete_all(void);
+
 #endif /* RECORDER_H */
