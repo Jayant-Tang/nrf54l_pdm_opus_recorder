@@ -95,8 +95,10 @@ west flash -d build_pdm_only
 声道选择：
 
 - `CONFIG_PDM_DEMO_STEREO`：立体声（双声道），是默认选项
-- `PDM_DEMO_MONO_LEFT`：左声道
-- `PDM_DEMO_MONO_RIGHT`：右声道
+- `PDM_DEMO_MONO_RISING_EDGE`：单声道，SEL 下拉的麦克风（上升沿数据有效）
+- `PDM_DEMO_MONO_FALLING_EDGE`：单声道，SEL 上拉的麦克风（下降沿数据有效）
+
+注意：行业规范左声道对应上升沿采样（麦克风 SEL 接地），但 Nordic PDM 驱动的左声道配置实际上是下降沿采样，因此代码里用宏反转了一下。
 
 音频采样与 Opus 压缩帧时长：
 

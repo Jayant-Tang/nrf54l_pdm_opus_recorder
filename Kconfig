@@ -42,17 +42,26 @@ choice
 	default PDM_DEMO_STEREO
 	help
 	  Stereo captures both PDM channels as interleaved 16-bit PCM.
-	  Mono captures one channel; pick the one matching the external
-	  microphone L/R strap.
+	  Mono captures one of the two PDM_CLK half-cycle slots; pick the
+	  edge matching the external microphone SEL strap (see the
+	  options' help text).
 
 config PDM_DEMO_STEREO
 	bool "Stereo (interleaved left/right)"
 
-config PDM_DEMO_MONO_LEFT
-	bool "Mono left"
+config PDM_DEMO_MONO_RISING_EDGE
+	bool "Mono, rising-edge slot (SEL-low microphone)"
+	help
+	  Capture the microphone whose data is valid on the rising edge
+	  of PDM_CLK - the one with SEL/LR strapped to GND ("left" in
+	  most microphone datasheets).
 
-config PDM_DEMO_MONO_RIGHT
-	bool "Mono right"
+config PDM_DEMO_MONO_FALLING_EDGE
+	bool "Mono, falling-edge slot (SEL-high microphone)"
+	help
+	  Capture the microphone whose data is valid on the falling edge
+	  of PDM_CLK - the one with SEL/LR strapped to VDD ("right" in
+	  most microphone datasheets).
 
 endchoice
 

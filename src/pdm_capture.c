@@ -89,16 +89,32 @@ static void build_dmic_config(struct dmic_cfg *cfg,
 		},
 	};
 
+	/* Industry convention vs. the NCS PDM driver's slot labels:
+	 *
+	 *   Mic SEL strap | Data valid on | Industry PCM channel | Driver slot label
+	 *   --------------+---------------+----------------------+------------------
+	 *   GND ("left")  | rising edge   | channel 0 (left)     | PDM_CHAN_RIGHT
+	 *   VDD ("right") | falling edge  | channel 1 (right)    | PDM_CHAN_LEFT
+	 *
+	 * The driver derives the sampling edge from the requested channel
+	 * map: def_map (ch0=LEFT, ch1=RIGHT) selects NRF_PDM_EDGE_LEFTFALLING,
+	 * alt_map (ch0=RIGHT, ch1=LEFT) selects NRF_PDM_EDGE_LEFTRISING.
+	 * Requesting the slots swapped therefore lands the SEL-low
+	 * microphone on channel 0, as the industry convention expects.
+	 * Alias the driver labels by the edge they actually select. */
+#define PDM_SLOT_FALLING_EDGE	PDM_CHAN_LEFT
+#define PDM_SLOT_RISING_EDGE	PDM_CHAN_RIGHT
+
 #if CONFIG_PDM_DEMO_STEREO
 	cfg->channel.req_chan_map_lo =
-		dmic_build_channel_map(0, 0, PDM_CHAN_LEFT) |
-		dmic_build_channel_map(1, 0, PDM_CHAN_RIGHT);
-#elif CONFIG_PDM_DEMO_MONO_RIGHT
+		dmic_build_channel_map(0, 0, PDM_SLOT_RISING_EDGE) |
+		dmic_build_channel_map(1, 0, PDM_SLOT_FALLING_EDGE);
+#elif CONFIG_PDM_DEMO_MONO_FALLING_EDGE
 	cfg->channel.req_chan_map_lo =
-		dmic_build_channel_map(0, 0, PDM_CHAN_RIGHT);
+		dmic_build_channel_map(0, 0, PDM_SLOT_FALLING_EDGE);
 #else
 	cfg->channel.req_chan_map_lo =
-		dmic_build_channel_map(0, 0, PDM_CHAN_LEFT);
+		dmic_build_channel_map(0, 0, PDM_SLOT_RISING_EDGE);
 #endif
 }
 
@@ -131,8 +147,8 @@ int pdm_capture_start(void)
 	}
 
 	LOG_INF("PDM capture started (%s)", IS_ENABLED(CONFIG_PDM_DEMO_STEREO) ?
-		"stereo" : (IS_ENABLED(CONFIG_PDM_DEMO_MONO_RIGHT) ?
-		"mono-right" : "mono-left"));
+		"stereo" : (IS_ENABLED(CONFIG_PDM_DEMO_MONO_FALLING_EDGE) ?
+		"mono-falling-edge" : "mono-rising-edge"));
 
 	return 0;
 }

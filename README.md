@@ -95,8 +95,10 @@ Sample rate choice:
 Channel choice:
 
 - `CONFIG_PDM_DEMO_STEREO`: stereo (dual channel), default
-- `PDM_DEMO_MONO_LEFT`: left channel
-- `PDM_DEMO_MONO_RIGHT`: right channel
+- `PDM_DEMO_MONO_RISING_EDGE`: mono, microphone with SEL strapped low (data valid on rising edge)
+- `PDM_DEMO_MONO_FALLING_EDGE`: mono, microphone with SEL strapped high (data valid on falling edge)
+
+Note: by industry convention the left channel is sampled on the rising edge of PDM_CLK (microphone SEL strapped to GND), but the Nordic PDM driver's "left channel" configuration actually samples on the falling edge, so the code swaps the channel map with a macro to compensate.
 
 Audio capture and Opus compression frame duration:
 
